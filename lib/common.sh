@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # common.sh — constants, configuration, and helpers shared by every part.
 #
 # Sourced by bin/runpool. Targets bash 3.2, which is what stock macOS ships,
@@ -23,6 +24,7 @@ RUNPOOL_LOG_DIR="${RUNPOOL_LOG_DIR:-${HOME}/Library/Logs/runpool}"
 RUNPOOL_LOG="${RUNPOOL_LOG_DIR}/runpool.log"
 RUNPOOL_ACTIVITY="${RUNPOOL_STATE_DIR}/activity"
 RUNPOOL_PAUSE_FLAG="${RUNPOOL_STATE_DIR}/paused"
+# shellcheck disable=SC2034  # read by lib/scheduler.sh
 RUNPOOL_LAST_CLEAN="${RUNPOOL_STATE_DIR}/last-clean"
 
 # Prefix for every launch-agent label this tool owns. Configurable so two
@@ -79,6 +81,9 @@ _rp_load_pool() {
   if [ ! -f "${conf}" ]; then
     _rp_err "unknown pool: $1 (see 'runpool pools')"; return 1
   fi
+  # Cleared before sourcing so that `set -u` does not trip on a repo pool,
+  # whose config file has no POOL_WATCH line at all.
+  # shellcheck disable=SC2034  # read by lib/scheduler.sh
   POOL_WATCH=""
   # shellcheck disable=SC1090
   . "${conf}"

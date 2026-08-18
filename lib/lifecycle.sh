@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lifecycle.sh — creating, resizing, starting, stopping and destroying pools.
 #
 # A pool is a set of runners bound to one GitHub scope. GitHub offers

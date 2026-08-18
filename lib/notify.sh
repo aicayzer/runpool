@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # notify.sh — the optional notifier hook, and the conditions worth reporting.
 #
 # runpool detects. It does not deliver. There is no mail sending here, no

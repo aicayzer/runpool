@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # scheduler.sh — reporting, autoscaling, idle standdown, cleaning, and the
 # launch agents that drive them.
 #
