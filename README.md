@@ -5,7 +5,7 @@ On-demand self-hosted GitHub Actions runner pools for macOS.
 Runners come up when jobs queue and stand down when nothing has run for a while. Nothing sits in the background for a repository you are not touching, and nothing starts at login.
 
 ```
-runpool register marfa --org withmarfa --count 4
+runpool register acme --org acme-inc --count 4
 runpool schedule install
 runpool status
 ```
@@ -70,8 +70,8 @@ First job after a quiet spell waits about a minute for its pool to come up. Ever
 
 ```
 GLOBAL: active
-  marfa      org  withmarfa             running 4/4  busy 2  github 4/4
-  arbr       repo aicayzer/arbr         running 0/2  busy 0  github 0/2
+  acme       org  acme-inc              running 4/4  busy 2  github 4/4
+  sideproj   repo me/side-project       running 0/2  busy 0  github 0/2
 ```
 
 **The GitHub column is not decoration.** GitHub prunes the registration of a runner that has not connected for a long time. The local install is unaffected and still looks entirely healthy: it starts, it connects, and it picks up nothing, so jobs queue forever against a pool that reports as running. Reporting only the local view hid exactly that for three weeks. `runpool reregister <pool>` fixes it.
