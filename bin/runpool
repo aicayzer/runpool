@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#
+# runpool — on-demand self-hosted GitHub Actions runner pools for macOS.
+#
+# A pool is a set of runners bound to one GitHub scope. Pools come up when jobs
+# queue and stand down when nothing has run for a while, so nothing sits in the
+# background for a repository nobody is touching.
+#
+# This tool controls capacity, not routing. Which runner a job lands on is
+# decided by the workflow's `runs-on`. A workflow pointed at a pool that is
+# down simply waits for it.
+#
+# 'set -e' is deliberately absent. Most of the logic branches on exit status,
+# and the failure modes that matter are handled explicitly with '|| return'.
+# Undefined variables and broken pipelines are still caught.
+set -uo pipefail
+
+# Resolve this script's real location, following symlinks, so an install that
+# links into /usr/local/bin still finds lib/ next to the real file.
+_rp_resolve_self() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [ -L "${src}" ]; do
+    dir="$(cd -P "$(dirname "${src}")" && pwd)"
+    src="$(readlink "${src}")"
+    case "${src}" in /*) ;; *) src="${dir}/${src}" ;; esac
+  done
+  cd -P "$(dirname "${src}")" && pwd
+}
+RUNPOOL_BIN_DIR="$(_rp_resolve_self)"
+RUNPOOL_ROOT="$(dirname "${RUNPOOL_BIN_DIR}")"
+RUNPOOL_SELF="${RUNPOOL_BIN_DIR}/runpool"
+export RUNPOOL_SELF
+
+# shellcheck source=lib/common.sh
+. "${RUNPOOL_ROOT}/lib/common.sh"
+# shellcheck source=lib/lifecycle.sh
+. "${RUNPOOL_ROOT}/lib/lifecycle.sh"
+# shellcheck source=lib/scheduler.sh
+. "${RUNPOOL_ROOT}/lib/scheduler.sh"
+# shellcheck source=lib/notify.sh
+. "${RUNPOOL_ROOT}/lib/notify.sh"
+
+_rp_help() {
+  cat <<'HELP'
+runpool — on-demand self-hosted GitHub Actions runner pools for macOS
+
+  register <pool> --repo OWNER/REPO|--org ORG [--count N]
+                           create a pool and configure its runners (left stopped)
+  set-count <pool> N       change a pool's runner count after registration
+  up|down <pool>           bring a pool online / stand it down
+  up-all|down-all          every pool
+  status [--json]          local state alongside what GitHub actually sees
+  pools                    list registered pools
+  reregister <pool>        recreate GitHub registrations, keep the local install
+  remove <pool>            deregister and delete a pool
+
+  tick                     autoscale, idle-down, contention and health checks
+  autoscale|sweep          bring pools up on queued work / stand idle ones down
+  clean [pool]             prune work dirs, temp, diagnostics, old binaries, caches
+  pause|resume             global kill switch (default resumed)
+  schedule install|remove  the background agents that run tick and clean
+
+Routing lives in each repository's workflow (runs-on), not here. This tool
+controls only whether runners are running.
+
+Configuration: ~/.config/runpool/config  (see runpool.conf.example)
+HELP
+}
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+case "${cmd}" in
+  register)       _rp_register "$@" ;;
+  set-count)      _rp_set_count "$@" ;;
+  reregister)     _rp_reregister "$@" ;;
+  up)             _rp_up "$@" ;;
+  down)           _rp_down "$@" ;;
+  up-all)         _rp_up_all ;;
+  down-all)       _rp_down_all "$@" ;;
+  remove)         _rp_remove "$@" ;;
+  status)         _rp_status "$@" ;;
+  pools)          _rp_pools ;;
+  tick)           _rp_tick ;;
+  autoscale)      _rp_autoscale ;;
+  sweep)          _rp_sweep ;;
+  clean)          _rp_clean "$@" ;;
+  pause)          _rp_pause ;;
+  resume)         _rp_resume ;;
+  schedule)       _rp_schedule "$@" ;;
+  rewrite-agents) _rp_rewrite_plists ;;
+  -h|--help|help|"") _rp_help ;;
+  *) _rp_err "unknown command: ${cmd}"; exit 2 ;;
+esac

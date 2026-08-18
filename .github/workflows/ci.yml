@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    # Pinned to a GitHub-hosted runner on purpose. This repository is public,
+    # so a pull request from an untrusted fork runs its own workflow file. The
+    # tool it builds refuses to wire a public repo to self-hosted runners for
+    # exactly this reason, and it would be absurd for the tool to break its own
+    # rule.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh install.sh
+
+  bash32:
+    # Stock macOS ships bash 3.2, so the tool has to parse under it. macOS
+    # runners are billed at ten times the Linux rate, so this job does nothing
+    # but a syntax check.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: parse under stock bash
+        run: |
+          /bin/bash --version | head -1
+          for f in bin/runpool lib/*.sh contrib/*.sh install.sh; do
+            /bin/bash -n "$f" && echo "ok  $f"
+          done

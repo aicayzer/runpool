@@ -1,0 +1,33 @@
+# runpool configuration — copy to ~/.config/runpool/config
+#
+# Everything here has a working default, so an empty file is a valid config.
+# This lives outside the repository because it is the only place installation
+# specifics belong; a checkout should carry none of them.
+
+# Where runners, pool definitions, launch agents and state live.
+# Defaults to ~/.local/share/runpool. Registration credentials live here, so
+# keep it off any synced or shared volume.
+# RUNPOOL_BASE="${HOME}/.local/share/runpool"
+
+# Prefix for every launch-agent label this installation owns. Change it only if
+# two installations must coexist on one machine.
+# RUNPOOL_LABEL_NS="runpool"
+
+# Stand a pool down after this many seconds with nothing running anywhere.
+# Restarting a runner takes seconds and needs no re-registration, so a short
+# grace only avoids churn between rapid pushes in one working session.
+# RUNPOOL_IDLE_SECS=1200
+
+# Warn above this 1-minute load average while jobs are running.
+# Defaults to six times core count, which sits clear of ordinary work.
+# RUNPOOL_LOAD_WARN=84
+
+# Stamp machine state into every job, so a contended failure and a real defect
+# stop looking identical in the log. Absolute path; unset means no hook.
+# RUNPOOL_JOB_HOOK="${HOME}/src/runpool/contrib/job-hook.sh"
+
+# Where to send anything worth reporting. A command reading one JSON object on
+# stdin. Unset means runpool reports nothing and works exactly as well.
+# RUNPOOL_NOTIFY_CMD="${HOME}/src/runpool/contrib/notify-webhook.sh"
+# RUNPOOL_WEBHOOK_URL="https://example.com/alert"
+# RUNPOOL_WEBHOOK_TOKEN="..."
