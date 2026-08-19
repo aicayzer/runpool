@@ -40,7 +40,11 @@ loadall="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1"/"$2"/
 cores="$(sysctl -n hw.ncpu 2>/dev/null)" || cores="0"
 # Concurrent jobs across the whole machine, which is what actually competes for
 # CPU. Includes this one.
-jobs="$(pgrep -f 'Runner.Worker' 2>/dev/null | wc -l | tr -d ' ')" || jobs="0"
+#
+# ps rather than pgrep: pgrep -f misses these processes, reporting four runner
+# listeners where ps sees six, and reporting zero workers during a job it was
+# itself invoked by. The bracket in [R]unner keeps grep from counting itself.
+jobs="$(ps -Ao command= 2>/dev/null | grep -c '[R]unner.Worker')" || jobs="0"
 free="$(df -h / 2>/dev/null | awk 'NR==2{print $4}')" || free="?"
 
 line="runner ${RUNNER_NAME:-?}, load ${loadall} (1/5/15m), ${cores} cores, ${jobs} job(s) on this machine, ${free} disk free"
