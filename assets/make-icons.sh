@@ -65,21 +65,15 @@ emit_svg 0.55 0 > "${OUT}/icon.svg"
 rsvg-convert -w 1024 -h 1024 "${OUT}/icon.svg" -o "${OUT}/icon@1024.png"
 echo "  icon.svg, icon@1024.png"
 
-# State variants, for a menu bar reporting how much of the pool is awake.
-render pool-0 0.0
-render pool-25 0.25
-render pool-50 0.5
-render pool-75 0.75
-render pool-100 1.0
-render pool-off 0.0 1
-
-# Menu bar variants. Same mark, drawn to the edge of the canvas rather than
-# inset, because a menu bar renders every icon to one height: padding baked
-# into the asset just makes the mark smaller than its neighbours.
+# State variants. Same mark, drawn much closer to the edge of the canvas,
+# because a menu bar renders every icon to one height: padding baked into the
+# asset just makes the mark smaller than its neighbours. A little padding is
+# kept, though. Cropped flush the mark sat visibly larger than the native
+# glyphs beside it, and larger again than the rows in its own dropdown.
 for spec in "0 0.0 0" "25 0.25 0" "50 0.5 0" "75 0.75 0" "100 1.0 0" "off 0.0 1"; do
   set -- ${spec}
   emit_svg "$2" "$3" \
-    | sed -e 's/viewBox="0 0 512 512"/viewBox="60 60 392 392"/' \
+    | sed -e 's/viewBox="0 0 512 512"/viewBox="40 40 432 432"/' \
     > "/tmp/rp-bar-$1.svg"
   rsvg-convert -w 512 -h 512 "/tmp/rp-bar-$1.svg" -o "${OUT}/bar-$1.png"
   echo "  bar-$1.png"
