@@ -10,8 +10,33 @@
 # Everything installation-specific lives in a config file outside the repo, so
 # a checkout carries no personal values. Every setting has a working default.
 RUNPOOL_CONFIG="${RUNPOOL_CONFIG:-${XDG_CONFIG_HOME:-${HOME}/.config}/runpool/config}"
+
+# Precedence is environment, then config file, then the defaults below.
+#
+# The config file uses plain assignments, so sourcing it would otherwise
+# clobber an explicit override and there would be no way to point a single
+# invocation at a scratch directory. That matters for anything testing this
+# on a machine that already has a config, the Homebrew test block included.
+_rp_env_BASE="${RUNPOOL_BASE:-}"
+_rp_env_LOG_DIR="${RUNPOOL_LOG_DIR:-}"
+_rp_env_LABEL_NS="${RUNPOOL_LABEL_NS:-}"
+_rp_env_IDLE_SECS="${RUNPOOL_IDLE_SECS:-}"
+_rp_env_LOAD_WARN="${RUNPOOL_LOAD_WARN:-}"
+_rp_env_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
+_rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
+
 # shellcheck disable=SC1090
 [ -f "${RUNPOOL_CONFIG}" ] && . "${RUNPOOL_CONFIG}"
+
+[ -n "${_rp_env_BASE}" ]        && RUNPOOL_BASE="${_rp_env_BASE}"
+[ -n "${_rp_env_LOG_DIR}" ]     && RUNPOOL_LOG_DIR="${_rp_env_LOG_DIR}"
+[ -n "${_rp_env_LABEL_NS}" ]    && RUNPOOL_LABEL_NS="${_rp_env_LABEL_NS}"
+[ -n "${_rp_env_IDLE_SECS}" ]   && RUNPOOL_IDLE_SECS="${_rp_env_IDLE_SECS}"
+[ -n "${_rp_env_LOAD_WARN}" ]   && RUNPOOL_LOAD_WARN="${_rp_env_LOAD_WARN}"
+[ -n "${_rp_env_NOTIFY_CMD}" ]  && RUNPOOL_NOTIFY_CMD="${_rp_env_NOTIFY_CMD}"
+[ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
+unset _rp_env_BASE _rp_env_LOG_DIR _rp_env_LABEL_NS _rp_env_IDLE_SECS \
+      _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK
 
 # Where runners, pool definitions, launch agents and state live. Never the
 # repository: it holds registration credentials.
