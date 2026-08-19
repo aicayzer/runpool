@@ -26,8 +26,15 @@ _rp_env_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 _rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
 _rp_env_TELEMETRY="${RUNPOOL_TELEMETRY:-}"
 
+# 'set -a' exports everything the config assigns, which matters because a
+# notifier or job hook runs as a child process and cannot see a variable that
+# was only set. The config may also define settings runpool knows nothing about
+# by name, such as an endpoint and token for whatever RUNPOOL_NOTIFY_CMD points
+# at, so they cannot be exported individually.
+set -a
 # shellcheck disable=SC1090
 [ -f "${RUNPOOL_CONFIG}" ] && . "${RUNPOOL_CONFIG}"
+set +a
 
 [ -n "${_rp_env_BASE}" ]        && RUNPOOL_BASE="${_rp_env_BASE}"
 [ -n "${_rp_env_LOG_DIR}" ]     && RUNPOOL_LOG_DIR="${_rp_env_LOG_DIR}"
@@ -39,6 +46,12 @@ _rp_env_TELEMETRY="${RUNPOOL_TELEMETRY:-}"
 [ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
 unset _rp_env_BASE _rp_env_LOG_DIR _rp_env_LABEL_NS _rp_env_IDLE_SECS \
       _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK _rp_env_TELEMETRY
+
+# Restored values need exporting again: the restore above is a plain assignment
+# and happens after 'set -a' was turned off.
+export RUNPOOL_BASE RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
+       RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_TELEMETRY \
+       RUNPOOL_CONFIG
 
 # Where runners, pool definitions, launch agents and state live. Never the
 # repository: it holds registration credentials.
