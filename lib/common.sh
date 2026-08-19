@@ -76,10 +76,13 @@ RUNPOOL_LABEL_NS="${RUNPOOL_LABEL_NS:-runpool}"
 # only avoids churn between rapid pushes inside one working session.
 RUNPOOL_IDLE_SECS="${RUNPOOL_IDLE_SECS:-1200}"
 
-# Warn above this 1-minute load average while jobs are running. Six times core
-# count sits clear of ordinary work: a routine two-job build reaches roughly
-# 3x on a 14-core machine, while the contention incidents this exists to catch
-# ran at 163 and 184.
+# Warn above this 1-minute load average while jobs are running. The contention
+# incidents this exists to catch ran at 163 and 184 on a 14-core machine.
+#
+# Six times core count is a starting point, not a safe default at any size.
+# A pool of N runners each forking a worker per core produces roughly N times
+# core count when it is simply busy, so once a pool passes six runners the
+# default fires on entirely healthy work. Raise it to suit the pool.
 RUNPOOL_LOAD_WARN="${RUNPOOL_LOAD_WARN:-$(( $(sysctl -n hw.ncpu 2>/dev/null || echo 8) * 6 ))}"
 
 # Optional command receiving one JSON object on stdin whenever something is
