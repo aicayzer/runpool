@@ -30,11 +30,15 @@ Every mature tool that solves this assumes Kubernetes, a cloud provider API, or 
 Requires macOS on Apple Silicon, and an authenticated [`gh`](https://cli.github.com).
 
 ```bash
+brew install aicayzer/tap/runpool
+```
+
+Or from source, which keeps the repository where you cloned it and symlinks `runpool` onto your PATH, so `git pull` updates the tool with no reinstall:
+
+```bash
 git clone https://github.com/aicayzer/runpool.git
 cd runpool && ./install.sh
 ```
-
-The repository stays where you cloned it and `runpool` is symlinked onto your PATH, so `git pull` updates the tool with no reinstall.
 
 ## Concepts
 
