@@ -60,6 +60,7 @@ cd runpool && ./install.sh
 | `reregister <pool>` | Recreate GitHub registrations, keeping the local install |
 | `remove <pool>` | Deregister and delete a pool |
 | `clean [pool]` | Prune work directories, temp, diagnostics, old binaries, caches |
+| `stats` | What jobs actually cost, from recorded telemetry |
 | `pause` / `resume` | Global kill switch |
 | `schedule install\|remove` | The background agents that drive everything above |
 
@@ -88,6 +89,16 @@ GLOBAL: active
 
 **`contrib/demo-status.sh` answers `status` with invented pools**, in the same shape and needing no runners, no repositories and no GitHub account. Point anything that reads RunPool's JSON at it to develop or demonstrate against a fixed, presentable machine. It ignores every other command, so nothing it is wired to can change a real pool.
 
+## `stats` and the runner-count question
+
+Set `RUNPOOL_JOB_HOOK` and `RUNPOOL_TELEMETRY=1` and every job records its duration, the machine's load, and how many jobs were already running when it started. `runpool stats` reads that back.
+
+**The obvious analysis is the wrong one.** Grouping durations by concurrency looks like it answers "does the machine slow down under load", and does not. A workflow has a fixed shape: a couple of fast gate jobs, then a fan-out of heavy ones. The heavy jobs are therefore exactly the ones running when concurrency is highest, so the table shows durations climbing steeply with concurrency on a machine that is coping perfectly well. The workload changed, not the machine.
+
+**So `stats` leads with the only fair comparison**: the same job type at different concurrency levels, and it says plainly when it does not yet have one. It will also tell you that waiting longer is not the answer, because a workflow that always runs four jobs at once will keep producing four-at-once samples however long you leave it.
+
+**To actually answer it, change the count on purpose.** Run at one setting for a week, change it, run for another, and compare the same job across the two. That is the whole method.
+
 ## Notifications are optional and external
 
 RunPool detects. It does not deliver.
@@ -113,7 +124,7 @@ Unset, RunPool reports nothing and works exactly as well. There is no mail sendi
 
 - **Public repositories are refused at registration.** A pull request from an untrusted fork runs its own workflow file, so wiring one to a self-hosted runner hands any stranger a shell on your machine. This is a refusal, not a warning.
 - **`services:` and `container:` do not force a hosted runner.** Those two workflow keys are Linux-only, but an ordinary `docker run` inside a step works anywhere Docker does, including here. Reach for that before accepting hosted spend.
-- **Concurrency is bounded by your cores, not by runner count.** A single test job commonly forks one worker per core, so a handful in parallel can oversubscribe a machine badly enough to time out tests that are not actually broken. If red runs come and go, lower the count before suspecting the code.
+- **More runners is not obviously more throughput.** A single test job commonly forks one worker per core, so several at once may oversubscribe the machine and time out tests that are not actually broken. That is the standard argument, it is repeated confidently everywhere including in older versions of this file, and it is worth knowing that it is an argument rather than a measurement. `runpool stats` is here to settle it on your machine rather than in the abstract.
 - **Per-runner package caches are load-bearing.** All runners share one HOME, so each gets its own pnpm store and npm cache. Without that, concurrent installs collide.
 - **Ephemeral macOS VMs are capped at two per machine**, by Apple's licence and enforced by the Virtualization framework. If you need more than two parallel macOS jobs, that whole family of tools is unavailable to you, which is part of why this one exists.
 
