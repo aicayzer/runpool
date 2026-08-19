@@ -115,6 +115,10 @@ Unset, runpool reports nothing and works exactly as well. There is no mail sendi
 
 launchd, `sysctl`, `~/Library` paths and the `osx-arm64` runner build. This is not an oversight: Linux and Windows are well served by [actions-runner-controller](https://github.com/actions/actions-runner-controller), [garm](https://github.com/cloudbase/garm) and others, and generalising would mean competing where there is no gap.
 
+## For agents
+
+`AGENTS.md` covers working on this repository. `skills/runpool/` is an agent skill for *using* it: wiring a repository to local CI, choosing a scope, and diagnosing a job that queues and never starts. Install it with your agent's usual skill mechanism, or point at the directory.
+
 ## Licence
 
 MIT.
