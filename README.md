@@ -1,3 +1,5 @@
+<img src="assets/icon.png" width="88" alt="">
+
 # runpool
 
 On-demand self-hosted GitHub Actions runner pools for macOS.

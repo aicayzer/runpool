@@ -29,11 +29,25 @@ lib/scheduler.sh     status, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
 contrib/             optional pieces the user opts into: job hook, webhook notifier
 skills/runpool/      agent skill for *using* runpool, shipped with the tool
+assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 ```
 
 **`skills/runpool/SKILL.md` and this file have different audiences and must not converge.** This file is for changing runpool. The skill is for an agent wiring some other repository to it, choosing a scope, or working out why a job is queued and nothing has picked it up. If a change alters observable behaviour, the skill needs updating; if it alters how the code is structured, this file does.
 
 **The three-way split is load-bearing**, not cosmetic. It is what lets the notifier be absent. Keep new code in the part that owns the concern; if something does not fit, that is a signal the concern is new, not that the split is wrong.
+
+## The icon
+
+`assets/icon.svg` is the source. Re-render rather than editing a PNG:
+
+```bash
+rsvg-convert -w 512 -h 512 assets/icon.svg -o assets/icon.png
+rsvg-convert -w 1024 -h 1024 assets/icon.svg -o assets/icon@1024.png
+```
+
+**ImageMagick cannot render it.** Its internal renderer silently drops the clip path and the outline, producing a bare wave. `rsvg-convert` from `librsvg` is required. Always look at the output before committing it.
+
+The background is transparent and there are no baked-in rounded corners, so the mark works on light and dark and is never double-rounded by anything that masks it.
 
 ## Conventions
 
