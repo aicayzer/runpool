@@ -28,7 +28,10 @@ lib/lifecycle.sh     register, set-count, up, down, reregister, remove
 lib/scheduler.sh     status, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
 contrib/             optional pieces the user opts into: job hook, webhook notifier
+skills/runpool/      agent skill for *using* runpool, shipped with the tool
 ```
+
+**`skills/runpool/SKILL.md` and this file have different audiences and must not converge.** This file is for changing runpool. The skill is for an agent wiring some other repository to it, choosing a scope, or working out why a job is queued and nothing has picked it up. If a change alters observable behaviour, the skill needs updating; if it alters how the code is structured, this file does.
 
 **The three-way split is load-bearing**, not cosmetic. It is what lets the notifier be absent. Keep new code in the part that owns the concern; if something does not fit, that is a signal the concern is new, not that the split is wrong.
 
