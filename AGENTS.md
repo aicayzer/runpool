@@ -27,7 +27,8 @@ lib/common.sh        config, logging, pool loading, launch agents, deregistratio
 lib/lifecycle.sh     register, set-count, up, down, reregister, remove
 lib/scheduler.sh     status, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
-contrib/             optional pieces the user opts into: job hook, webhook notifier
+contrib/             optional pieces the user opts into: job hook, webhook notifier,
+                     demo status fixture
 skills/runpool/      agent skill for *using* runpool, shipped with the tool
 assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 ```

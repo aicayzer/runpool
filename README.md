@@ -86,6 +86,8 @@ GLOBAL: active
 
 **`status --json --local` skips the GitHub query entirely**, reporting those two fields as `null`. Anything refreshing on a timer should use it: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
 
+**`contrib/demo-status.sh` answers `status` with invented pools**, in the same shape and needing no runners, no repositories and no GitHub account. Point anything that reads RunPool's JSON at it to develop or demonstrate against a fixed, presentable machine. It ignores every other command, so nothing it is wired to can change a real pool.
+
 ## Notifications are optional and external
 
 RunPool detects. It does not deliver.
