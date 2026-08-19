@@ -24,6 +24,7 @@ _rp_env_IDLE_SECS="${RUNPOOL_IDLE_SECS:-}"
 _rp_env_LOAD_WARN="${RUNPOOL_LOAD_WARN:-}"
 _rp_env_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 _rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
+_rp_env_TELEMETRY="${RUNPOOL_TELEMETRY:-}"
 
 # shellcheck disable=SC1090
 [ -f "${RUNPOOL_CONFIG}" ] && . "${RUNPOOL_CONFIG}"
@@ -35,8 +36,9 @@ _rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
 [ -n "${_rp_env_LOAD_WARN}" ]   && RUNPOOL_LOAD_WARN="${_rp_env_LOAD_WARN}"
 [ -n "${_rp_env_NOTIFY_CMD}" ]  && RUNPOOL_NOTIFY_CMD="${_rp_env_NOTIFY_CMD}"
 [ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
+[ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
 unset _rp_env_BASE _rp_env_LOG_DIR _rp_env_LABEL_NS _rp_env_IDLE_SECS \
-      _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK
+      _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK _rp_env_TELEMETRY
 
 # Where runners, pool definitions, launch agents and state live. Never the
 # repository: it holds registration credentials.
@@ -71,6 +73,11 @@ RUNPOOL_LOAD_WARN="${RUNPOOL_LOAD_WARN:-$(( $(sysctl -n hw.ncpu 2>/dev/null || e
 # worth reporting. Unset by default: runpool works fully without a notifier and
 # never grows one of its own. See lib/notify.sh and contrib/notify-webhook.sh.
 RUNPOOL_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
+
+# Record one line per job to <base>/telemetry/jobs.jsonl, so the right runner
+# count can be measured rather than argued about. Off by default. Timings and
+# machine state only, nothing about the code, and it never leaves the machine.
+RUNPOOL_TELEMETRY="${RUNPOOL_TELEMETRY:-0}"
 
 mkdir -p "${RUNPOOL_POOL_DIR}" "${RUNPOOL_AGENT_DIR}" \
          "${RUNPOOL_STATE_DIR}" "${RUNPOOL_LOG_DIR}" 2>/dev/null || true
@@ -194,6 +201,24 @@ _rp_deregister_runner() {
 # ---------------------------------------------------------------------------
 # Launch agents
 # ---------------------------------------------------------------------------
+# The runner invokes a job hook with no arguments and gives no indication of
+# which phase it is, so a single script cannot tell "started" from "completed".
+# Generate a one-line wrapper per phase that passes it in. Written into the
+# runtime directory rather than the repo, because the path to the user's hook
+# is installation-specific.
+_rp_write_hook_wrappers() {
+  [ -n "${RUNPOOL_JOB_HOOK:-}" ] || return 0
+  local dir="${RUNPOOL_BASE}/hooks" phase
+  mkdir -p "${dir}" 2>/dev/null
+  for phase in started completed; do
+    cat >| "${dir}/${phase}.sh" <<WRAP
+#!/bin/sh
+exec "${RUNPOOL_JOB_HOOK}" ${phase}
+WRAP
+    chmod +x "${dir}/${phase}.sh" 2>/dev/null
+  done
+}
+
 # Write the on-demand launch agent for one runner. $1 label, $2 runner_dir.
 #
 # Agents are written outside ~/Library/LaunchAgents on purpose, so that macOS
@@ -201,7 +226,7 @@ _rp_deregister_runner() {
 # because the tick saw queued work.
 _rp_write_plist() {
   local label="$1" dir="$2" plist="${RUNPOOL_AGENT_DIR}/$1.plist" hook=""
-  [ -n "${RUNPOOL_JOB_HOOK:-}" ] && hook="${RUNPOOL_JOB_HOOK}"
+  [ -n "${RUNPOOL_JOB_HOOK:-}" ] && { _rp_write_hook_wrappers; hook="${RUNPOOL_BASE}/hooks"; }
   {
     cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -230,7 +255,9 @@ PLIST
     if [ -n "${hook}" ]; then
       cat <<PLIST
     <key>ACTIONS_RUNNER_HOOK_JOB_STARTED</key>
-    <string>${hook}</string>
+    <string>${hook}/started.sh</string>
+    <key>ACTIONS_RUNNER_HOOK_JOB_COMPLETED</key>
+    <string>${hook}/completed.sh</string>
 PLIST
     fi
     cat <<PLIST

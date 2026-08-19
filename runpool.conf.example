@@ -26,6 +26,12 @@
 # stop looking identical in the log. Absolute path; unset means no hook.
 # RUNPOOL_JOB_HOOK="${HOME}/src/runpool/contrib/job-hook.sh"
 
+# Record one line per job to <base>/telemetry/jobs.jsonl, so `runpool stats` can
+# answer how many runners this machine should actually have. Timings and machine
+# state only, nothing about the code, and it never leaves the machine.
+# Needs RUNPOOL_JOB_HOOK set as well.
+# RUNPOOL_TELEMETRY=1
+
 # Where to send anything worth reporting. A command reading one JSON object on
 # stdin. Unset means runpool reports nothing and works exactly as well.
 # RUNPOOL_NOTIFY_CMD="${HOME}/src/runpool/contrib/notify-webhook.sh"

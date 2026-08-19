@@ -39,6 +39,8 @@ export RUNPOOL_SELF
 . "${RUNPOOL_ROOT}/lib/scheduler.sh"
 # shellcheck source=lib/notify.sh
 . "${RUNPOOL_ROOT}/lib/notify.sh"
+# shellcheck source=lib/stats.sh
+. "${RUNPOOL_ROOT}/lib/stats.sh"
 
 _rp_help() {
   cat <<'HELP'
@@ -51,6 +53,7 @@ runpool — on-demand self-hosted GitHub Actions runner pools for macOS
   up-all|down-all          every pool
   status [--json]          local state alongside what GitHub actually sees
   pools                    list registered pools
+  stats                    job durations by concurrency, to size the pool with data
   reregister <pool>        recreate GitHub registrations, keep the local install
   remove <pool>            deregister and delete a pool
 
@@ -79,6 +82,7 @@ case "${cmd}" in
   remove)         _rp_remove "$@" ;;
   status)         _rp_status "$@" ;;
   pools)          _rp_pools ;;
+  stats)          _rp_stats ;;
   tick)           _rp_tick ;;
   autoscale)      _rp_autoscale ;;
   sweep)          _rp_sweep ;;
