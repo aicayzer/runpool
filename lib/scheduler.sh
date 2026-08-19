@@ -87,8 +87,16 @@ _rp_status() {
 _rp_status_json() {
   local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" wr wfirst
   _rp_paused && paused="true"
-  printf '{"paused":%s,"local":%s,"paths":{"base":"%s","log":"%s","log_dir":"%s","telemetry":"%s"},"pools":[' \
+  # Machine state belongs here rather than being recomputed by every caller.
+  # The contention threshold in particular is configurable, so a caller that
+  # derived it from core count would quietly disagree with the tool that acts
+  # on it.
+  local load cores
+  load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
+  cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 0)
+  printf '{"paused":%s,"local":%s,"machine":{"load":%s,"cores":%s,"load_warn":%s},"paths":{"base":"%s","log":"%s","log_dir":"%s","telemetry":"%s"},"pools":[' \
     "${paused}" "$( [ "${local_only}" = "1" ] && echo true || echo false )" \
+    "${load:-0}" "${cores:-0}" "${RUNPOOL_LOAD_WARN}" \
     "${RUNPOOL_BASE}" "${RUNPOOL_LOG}" "${RUNPOOL_LOG_DIR}" "${RUNPOOL_BASE}/telemetry/jobs.jsonl"
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue

@@ -1,6 +1,6 @@
-# Agent instructions for runpool
+# Agent instructions for RunPool
 
-Guidance for an agent changing this repository. The README is for people *using* runpool; this file is for whoever is *editing* it.
+Guidance for an agent changing this repository. The README is for people *using* RunPool; this file is for whoever is *editing* it.
 
 ## What this is
 
@@ -96,4 +96,4 @@ The pattern is already established: configuration precedence was found and fixed
 
 ## This repository's own CI
 
-**Pinned to GitHub-hosted runners, permanently.** This repo is public, so a pull request from an untrusted fork runs its own workflow file. runpool refuses to register a public repository for exactly that reason, and it would be absurd for the tool to break its own rule.
+**Pinned to GitHub-hosted runners, permanently.** This repo is public, so a pull request from an untrusted fork runs its own workflow file. RunPool refuses to register a public repository for exactly that reason, and it would be absurd for the tool to break its own rule.

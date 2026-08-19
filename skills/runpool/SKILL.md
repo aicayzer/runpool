@@ -12,7 +12,7 @@ description: |
 
 On-demand self-hosted GitHub Actions runner pools for macOS. Pools wake when jobs queue and stand down when idle.
 
-**runpool controls capacity, not routing.** Whether runners are running is runpool's job. Which runner a job lands on is decided by the workflow's `runs-on`. Both have to be right, and they are changed in different places.
+**RunPool controls capacity, not routing.** Whether runners are running is runpool's job. Which runner a job lands on is decided by the workflow's `runs-on`. Both have to be right, and they are changed in different places.
 
 ## Before anything else
 
@@ -27,7 +27,7 @@ Not installed:
 brew install aicayzer/tap/runpool
 ```
 
-runpool needs an authenticated `gh` with admin on the target, because registering a runner requires a registration token.
+RunPool needs an authenticated `gh` with admin on the target, because registering a runner requires a registration token.
 
 ## Wiring a repository to local CI
 
@@ -111,7 +111,7 @@ Persistent runners never clean up after themselves. `runpool clean` prunes work 
 
 ## Notifications
 
-runpool ships with **no notifier** and works fully without one. Set `RUNPOOL_NOTIFY_CMD` to a command reading one JSON object on stdin; `contrib/notify-webhook.sh` is a reference implementation.
+RunPool ships with **no notifier** and works fully without one. Set `RUNPOOL_NOTIFY_CMD` to a command reading one JSON object on stdin; `contrib/notify-webhook.sh` is a reference implementation.
 
 **Do not add notification logic to runpool.** It reports two conditions, both about the pool's own health: contention, and runners that are up but unreachable. Watching workflow *results* belongs to whatever receives the notifications, because that should not depend on the laptop being awake.
 
@@ -120,4 +120,4 @@ runpool ships with **no notifier** and works fully without one. Set `RUNPOOL_NOT
 - **Registration credentials live in the runtime directory**, not the repo. Never commit one, never copy one between machines.
 - **All runners share one HOME**, so each needs its own package store and cache. runpool sets this in the launch agent; if you hand-edit an agent, preserve it or concurrent installs collide.
 - **Ephemeral macOS VMs are capped at two per machine** by Apple's licence. If someone suggests Tart, Tartelet or Cilicon for more than two parallel macOS jobs, that ceiling is why it will not work.
-- **Nothing watches runpool itself.** This is an accepted gap, not an oversight. Do not build a heartbeat for it.
+- **Nothing watches RunPool itself.** This is an accepted gap, not an oversight. Do not build a heartbeat for it.

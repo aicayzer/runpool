@@ -1,6 +1,6 @@
 <img src="assets/icon.png" width="88" alt="">
 
-# runpool
+# RunPool
 
 On-demand self-hosted GitHub Actions runner pools for macOS.
 
@@ -25,7 +25,7 @@ The official runner makes that harder than it should be:
 - **It runs forever once started.** GitHub's own guidance discourages persistent always-on runners, and offers nothing that stands them down.
 - **Nothing cleans up.** Work directories, diagnostics, superseded binaries and package stores accumulate until the disk is full.
 
-Every mature tool that solves this assumes Kubernetes, a cloud provider API, or ephemeral virtual machines. **One Mac running a few pools has no off-the-shelf answer**, which is the gap runpool fills.
+Every mature tool that solves this assumes Kubernetes, a cloud provider API, or ephemeral virtual machines. **One Mac running a few pools has no off-the-shelf answer**, which is the gap RunPool fills.
 
 ## Install
 
@@ -46,7 +46,7 @@ cd runpool && ./install.sh
 
 **A pool is a set of runners bound to one GitHub scope.** GitHub offers repository, organisation and enterprise scopes and **no user-account scope**, which is the single most surprising thing about self-hosted runners. An organisation shares one pool across all its repositories; a personal repository needs its own, and cannot borrow an organisation's.
 
-**Capacity and routing are separate, deliberately.** Which runner a job lands on is decided by the workflow's `runs-on`. runpool decides only whether the runners are running. A workflow pointed at a pool that happens to be down simply waits for it, rather than silently rerouting to a hosted runner that costs ten times as much.
+**Capacity and routing are separate, deliberately.** Which runner a job lands on is decided by the workflow's `runs-on`. RunPool decides only whether the runners are running. A workflow pointed at a pool that happens to be down simply waits for it, rather than silently rerouting to a hosted runner that costs ten times as much.
 
 ## Commands
 
@@ -88,7 +88,7 @@ GLOBAL: active
 
 ## Notifications are optional and external
 
-runpool detects. It does not deliver.
+RunPool detects. It does not deliver.
 
 Set `RUNPOOL_NOTIFY_CMD` to any command that reads one JSON object on stdin:
 
@@ -103,7 +103,7 @@ Set `RUNPOOL_NOTIFY_CMD` to any command that reads one JSON object on stdin:
 }
 ```
 
-Unset, runpool reports nothing and works exactly as well. There is no mail sending here, no address routing, no severity policy and no dedup window, because none of that is this tool's business. `contrib/notify-webhook.sh` is a reference implementation.
+Unset, RunPool reports nothing and works exactly as well. There is no mail sending here, no address routing, no severity policy and no dedup window, because none of that is this tool's business. `contrib/notify-webhook.sh` is a reference implementation.
 
 **Two things are reported**, both about the pool's own health: the machine being too contended to trust a result, and runners that are running but unreachable. Failed workflow runs are deliberately *not* reported, because watching CI results is a job for something that does not depend on this laptop being awake.
 

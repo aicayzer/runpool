@@ -72,3 +72,15 @@ render pool-50 0.5
 render pool-75 0.75
 render pool-100 1.0
 render pool-off 0.0 1
+
+# Menu bar variants. Same mark, drawn to the edge of the canvas rather than
+# inset, because a menu bar renders every icon to one height: padding baked
+# into the asset just makes the mark smaller than its neighbours.
+for spec in "0 0.0 0" "25 0.25 0" "50 0.5 0" "75 0.75 0" "100 1.0 0" "off 0.0 1"; do
+  set -- ${spec}
+  emit_svg "$2" "$3" \
+    | sed -e 's/viewBox="0 0 512 512"/viewBox="60 60 392 392"/' \
+    > "/tmp/rp-bar-$1.svg"
+  rsvg-convert -w 512 -h 512 "/tmp/rp-bar-$1.svg" -o "${OUT}/bar-$1.png"
+  echo "  bar-$1.png"
+done
