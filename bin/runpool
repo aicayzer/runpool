@@ -51,7 +51,9 @@ runpool — on-demand self-hosted GitHub Actions runner pools for macOS
   set-count <pool> N       change a pool's runner count after registration
   up|down <pool>           bring a pool online / stand it down
   up-all|down-all          every pool
-  status [--json]          local state alongside what GitHub actually sees
+  status [--json] [--local]
+                           local state alongside what GitHub actually sees;
+                           --local skips the GitHub query entirely
   pools                    list registered pools
   stats                    job durations by concurrency, to size the pool with data
   reregister <pool>        recreate GitHub registrations, keep the local install

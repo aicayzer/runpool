@@ -33,7 +33,15 @@ _rp_running_in() {
 # cleanly, looks healthy in every local check, and picks up nothing. Reporting
 # only the local view hid exactly that for three weeks.
 _rp_status() {
-  [ "${1:-}" = "--json" ] && { _rp_status_json; return $?; }
+  local as_json=0 local_only=0 arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --json)  as_json=1 ;;
+      --local) local_only=1 ;;
+      *) _rp_err "unknown flag: ${arg} (usage: runpool status [--json] [--local])"; return 1 ;;
+    esac
+  done
+  [ "${as_json}" = "1" ] && { _rp_status_json "${local_only}"; return $?; }
 
   if _rp_paused; then echo "GLOBAL: paused (runpool off)"; else echo "GLOBAL: active"; fi
   local total_running=0 total_busy=0 p running busy gh reg online note warn=0
@@ -69,22 +77,44 @@ _rp_status() {
 # Machine-readable status, so anything wrapping this tool reads structured data
 # rather than scraping prose. Hand-assembled rather than shelled out to jq,
 # because none of these values can contain a character needing escaping: pool
-# names and targets come from GitHub, and the rest are integers.
+# names, targets and watched repos are all GitHub identifiers, and the rest are
+# integers or fixed strings.
+#
+# $1 local_only: skip the GitHub query and report its two fields as null.
+# A caller refreshing on a timer must use it. One API call per pool per minute
+# is thousands a day, and it makes a passive readout fail whenever the network
+# does, which is the opposite of what a passive readout is for.
 _rp_status_json() {
-  local p running busy gh reg online first=1 paused="false"
+  local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" wr wfirst
   _rp_paused && paused="true"
-  printf '{"paused":%s,"pools":[' "${paused}"
+  printf '{"paused":%s,"local":%s,"paths":{"base":"%s","log":"%s","log_dir":"%s","telemetry":"%s"},"pools":[' \
+    "${paused}" "$( [ "${local_only}" = "1" ] && echo true || echo false )" \
+    "${RUNPOOL_BASE}" "${RUNPOOL_LOG}" "${RUNPOOL_LOG_DIR}" "${RUNPOOL_BASE}/telemetry/jobs.jsonl"
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
     running="$(_rp_running_in "${p}" "${POOL_COUNT}")"
     busy="$(_rp_busy_in "${POOL_DIR}")"
-    gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
-    [ "${reg}" = "?" ] && reg="null"
-    [ "${online}" = "?" ] && online="null"
+    if [ "${local_only}" = "1" ]; then
+      reg="null"; online="null"
+    else
+      gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
+      [ "${reg}" = "?" ] && reg="null"
+      [ "${online}" = "?" ] && online="null"
+    fi
     [ "${first}" = "1" ] || printf ','
     first=0
-    printf '{"name":"%s","scope":"%s","target":"%s","count":%s,"running":%s,"busy":%s,"github_registered":%s,"github_online":%s}' \
+    printf '{"name":"%s","scope":"%s","target":"%s","count":%s,"running":%s,"busy":%s,"github_registered":%s,"github_online":%s,"watch":[' \
       "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}" "${running}" "${busy}" "${reg}" "${online}"
+    # An org pool serves many repositories and only its config knows which.
+    # Without this a caller cannot show what a pool actually covers.
+    wfirst=1
+    for wr in $(echo "${POOL_WATCH:-}" | tr ',' ' '); do
+      [ -n "${wr}" ] || continue
+      [ "${wfirst}" = "1" ] || printf ','
+      wfirst=0
+      printf '"%s"' "${wr}"
+    done
+    printf ']}'
   done
   printf ']}\n'
 }

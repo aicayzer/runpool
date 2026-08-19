@@ -82,9 +82,12 @@ runpool status
 - **Everything looks right but the job still waits** — check routing rather than capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's.
 
 ```bash
-runpool status --json        # machine-readable, for scripting
+runpool status --json           # machine-readable, for scripting
+runpool status --json --local   # same shape, no GitHub call; use this on a timer
 tail -50 ~/Library/Logs/runpool/runpool.log
 ```
+
+The JSON carries each pool's watched repositories and the paths to its logs, so a wrapper never has to guess either.
 
 ## Capacity
 

@@ -82,7 +82,9 @@ GLOBAL: active
 
 **The GitHub column is not decoration.** GitHub prunes the registration of a runner that has not connected for a long time. The local install is unaffected and still looks entirely healthy: it starts, it connects, and it picks up nothing, so jobs queue forever against a pool that reports as running. Reporting only the local view hid exactly that for three weeks. `runpool reregister <pool>` fixes it.
 
-`status --json` gives the same thing machine-readably.
+`status --json` gives the same thing machine-readably, including each pool's watched repositories and the paths to its logs.
+
+**`status --json --local` skips the GitHub query entirely**, reporting those two fields as `null`. Anything refreshing on a timer should use it: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
 
 ## Notifications are optional and external
 
