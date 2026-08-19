@@ -95,9 +95,11 @@ Set `RUNPOOL_JOB_HOOK` and `RUNPOOL_TELEMETRY=1` and every job records its durat
 
 **The obvious analysis is the wrong one.** Grouping durations by concurrency looks like it answers "does the machine slow down under load", and does not. A workflow has a fixed shape: a couple of fast gate jobs, then a fan-out of heavy ones. The heavy jobs are therefore exactly the ones running when concurrency is highest, so the table shows durations climbing steeply with concurrency on a machine that is coping perfectly well. The workload changed, not the machine.
 
-**So `stats` leads with the only fair comparison**: the same job type at different concurrency levels, and it says plainly when it does not yet have one. It will also tell you that waiting longer is not the answer, because a workflow that always runs four jobs at once will keep producing four-at-once samples however long you leave it.
+**So `stats` does not try to answer it.** It describes what jobs cost and stops, because an analysis baked into a tool is a blind spot with a version number, and the first one here reported a contention effect that was pure artefact.
 
-**To actually answer it, change the count on purpose.** Run at one setting for a week, change it, run for another, and compare the same job across the two. That is the whole method.
+**The answer comes from the records plus GitHub.** `contrib/telemetry-join.sh` emits one row per job with duration, queue time, load and the raw timestamps, joined to what GitHub knows about the same run. Queue time is the figure that matters, because more runners help if and only if work is waiting, and it is invisible locally: the job hook only fires once a runner has already picked the job up.
+
+Read that carefully too. A wait can be a cold pool waking, a dependency that has not finished, or genuinely no free runner, and only the last is fixed by more runners. The runpool skill sets out how to tell them apart.
 
 ## Notifications are optional and external
 

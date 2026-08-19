@@ -1,24 +1,17 @@
 # shellcheck shell=bash
-# stats.sh — summarise recorded job telemetry.
+# stats.sh — what recorded jobs actually cost.
 #
-# This exists to answer one question with data instead of folklore: how many
-# runners should this machine have?
+# Deliberately a description rather than an analysis.
 #
-# The received wisdom is that a test job forks roughly one worker per core, so
-# several at once thrash rather than run faster. That is plausible, it is
-# repeated confidently in this project's own documentation, and nobody has ever
-# measured it on a real machine.
+# This began as an attempt to answer "how many runners should this machine
+# have" in bash, and that was the wrong shape for the problem. Every analysis
+# hard-coded here is a blind spot with a version number, and the first one
+# shipped confidently reported a contention effect that turned out to be an
+# artefact of how CI workflows are structured. The raw records joined to GitHub
+# can answer the question properly. A fixed table cannot.
 #
-# The trap is that grouping durations by concurrency alone answers a different
-# question than the one being asked. CI workflows have a fixed shape: a couple
-# of fast gates, then a fan-out of heavy jobs. The heavy jobs are therefore the
-# ones running when concurrency is highest, and a naive table shows durations
-# climbing steeply with concurrency on a machine that is coping perfectly well.
-# It is the workload changing, not the machine struggling.
-#
-# So the headline here is the like-for-like comparison: the same job type at
-# different concurrency levels. Everything else is descriptive, and is labelled
-# as such.
+# So this prints what a person wants at a glance and points at the data, and
+# at the tool that joins it. See contrib/telemetry-join.sh.
 #
 # Requires RUNPOOL_TELEMETRY=1 and the job hook. Reads only local files.
 
@@ -30,33 +23,28 @@ _rp_stats_field() {
   sed -n "s/.*\"$1\":\([0-9][0-9.]*\).*/\1/p"
 }
 
-# Flatten completed jobs to "duration<TAB>concurrent<TAB>workflow / job".
-#
-# Fields are matched by name rather than by position, so reordering anything in
-# the hook cannot silently produce nonsense here.
+# Completed jobs as "duration<TAB>workflow / job". Fields are matched by name
+# rather than by position, so reordering anything in the hook cannot silently
+# produce nonsense here.
 _rp_stats_rows() {
   awk '
-    function jstr(line, key,   s) {
-      if (!match(line, "\"" key "\":\"[^\"]*\"")) return ""
-      s = substr(line, RSTART, RLENGTH)
-      sub("^\"" key "\":\"", "", s); sub("\"$", "", s)
-      return s
+    function jstr(l, k,   s) {
+      if (!match(l, "\"" k "\":\"[^\"]*\"")) return ""
+      s = substr(l, RSTART, RLENGTH); sub("^\"" k "\":\"", "", s); sub("\"$", "", s); return s
     }
-    function jnum(line, key,   s) {
-      if (!match(line, "\"" key "\":-?[0-9]+")) return ""
-      s = substr(line, RSTART, RLENGTH)
-      sub("^\"" key "\":", "", s)
-      return s
+    function jnum(l, k,   s) {
+      if (!match(l, "\"" k "\":-?[0-9]+")) return ""
+      s = substr(l, RSTART, RLENGTH); sub("^\"" k "\":", "", s); return s
     }
     /"phase":"completed"/ {
-      d = jnum($0, "duration"); c = jnum($0, "concurrent")
-      if (d == "" || c == "") next
-      printf "%s\t%s\t%s / %s\n", d, c, jstr($0, "workflow"), jstr($0, "job")
+      d = jnum($0, "duration")
+      if (d == "") next
+      printf "%s\t%s / %s\n", d, jstr($0, "workflow"), jstr($0, "job")
     }
   ' "$1"
 }
 
-# Median and p90 of the durations on stdin, as "median<TAB>p90<TAB>count".
+# Median, p90 and count of the durations on stdin.
 _rp_stats_quantiles() {
   sort -n | awk '
     { d[NR] = $1 }
@@ -68,7 +56,7 @@ _rp_stats_quantiles() {
 }
 
 _rp_stats() {
-  local f rows n_done first last cores peak_load comparable
+  local f rows n_done first last cores peak_load total key
 
   f="$(_rp_stats_file)"
 
@@ -103,142 +91,31 @@ _rp_stats() {
   printf 'Machine         %s cores, peak 1-minute load %s while a job was starting\n' \
     "${cores}" "${peak_load}"
 
-  _rp_stats_like_for_like "${rows}"
-  comparable=$?
-
-  _rp_stats_by_concurrency "${rows}"
-  _rp_stats_by_job "${rows}"
-  _rp_stats_verdict "${comparable}"
-}
-
-# The only fair comparison: one job type, run at more than one concurrency.
-# Returns the number of job types that qualify, so the verdict can be honest
-# about whether anything has been established.
-_rp_stats_like_for_like() {
-  local rows="$1" keys key levels c n=0 solid
-
   echo ""
-  echo "Same job, different concurrency"
-  echo "-------------------------------"
-
-  # Job types seen at two or more concurrency levels.
-  keys=$(printf '%s\n' "${rows}" | awk -F'\t' '{print $3 "\t" $2}' | sort -u \
-         | awk -F'\t' '{c[$1]++} END {for (k in c) if (c[k] > 1) print k}' | sort)
-
-  if [ -z "${keys}" ]; then
-    echo "  Nothing to compare. Every job type so far has only ever run at one"
-    echo "  concurrency level, so no pair of numbers here differs by concurrency"
-    echo "  alone."
-    return 0
-  fi
-
-  printf '  %-32s %s\n' "job" "median at each concurrency"
-  while IFS= read -r key; do
+  printf '  %-34s %6s %10s %10s\n' "job" "runs" "median" "p90"
+  printf '%s\n' "${rows}" | awk -F'\t' '{print $2}' | sort -u | while IFS= read -r key; do
     [ -n "${key}" ] || continue
-    levels=""; solid=0
-    for c in $(printf '%s\n' "${rows}" | awk -F'\t' -v k="${key}" '$3 == k {print $2}' | sort -un); do
-      set -- $(printf '%s\n' "${rows}" \
-               | awk -F'\t' -v k="${key}" -v c="${c}" '$3 == k && $2 == c {print $1}' \
-               | _rp_stats_quantiles)
-      [ "$3" -ge 3 ] && solid=$(( solid + 1 ))
-      levels="${levels}  c=${c}: $(_rp_stats_dur "$1") (n=$3)"
-    done
-    # Only a job with a real sample at two or more levels has measured
-    # anything. The rest are shown because they are the closest thing to
-    # evidence available, not because they are evidence.
-    [ "${solid}" -ge 2 ] && n=$(( n + 1 ))
-    printf '  %-32s%s\n' "${key}" "${levels}"
-  done <<EOF
-${keys}
-EOF
-  return "${n}"
-}
-
-_rp_stats_by_concurrency() {
-  local rows="$1" c median p90 count shared
-
-  echo ""
-  echo "By concurrency, for reference only"
-  echo "----------------------------------"
-  printf '  %10s %6s %10s %10s\n' "concurrent" "jobs" "median" "p90"
-
-  for c in $(printf '%s\n' "${rows}" | awk -F'\t' '{print $2}' | sort -un); do
-    set -- $(printf '%s\n' "${rows}" | awk -F'\t' -v c="${c}" '$2 == c {print $1}' | _rp_stats_quantiles)
-    median="$1"; p90="$2"; count="$3"
-    printf '  %10s %6s %10s %10s\n' "${c}" "${count}" \
-      "$(_rp_stats_dur "${median}")" "$(_rp_stats_dur "${p90}")"
+    set -- $(printf '%s\n' "${rows}" | awk -F'\t' -v k="${key}" '$2 == k {print $1}' | _rp_stats_quantiles)
+    printf '  %-34s %6s %10s %10s\n' "${key}" "$3" "$(_rp_stats_dur "$1")" "$(_rp_stats_dur "$2")"
   done
 
-  # The warning that makes the table safe to look at. If the busiest and
-  # quietest levels have no job type in common, the difference between their
-  # rows is workload, and reading it as contention is simply wrong.
-  shared=$(_rp_stats_shared_types "${rows}")
+  total=$(printf '%s\n' "${rows}" | awk -F'\t' '{s+=$1} END {print s+0}')
   echo ""
-  if [ "${shared}" -eq 0 ]; then
-    echo "  Do not read a trend down this column. The busiest and quietest levels"
-    echo "  here have no job type in common, so the rows describe different work,"
-    echo "  not the same work under different load."
-  else
-    echo "  ${shared} job type(s) appear at both the busiest and quietest levels,"
-    echo "  so some of this difference is comparable. The table above is still"
-    echo "  the sounder guide."
-  fi
-}
-
-# How many job types appear at both the lowest and highest concurrency seen.
-_rp_stats_shared_types() {
-  printf '%s\n' "$1" | awk -F'\t' '
-    { seen[$3 "\t" $2] = 1; if (min == "" || $2 < min) min = $2; if ($2 > max) max = $2 }
-    END {
-      if (min == max) { print 0; exit }
-      for (k in seen) {
-        split(k, p, "\t")
-        if (p[2] == min) lo[p[1]] = 1
-        if (p[2] == max) hi[p[1]] = 1
-      }
-      n = 0
-      for (j in lo) if (j in hi) n++
-      print n
-    }
-  '
-}
-
-_rp_stats_by_job() {
-  local rows="$1" key
+  printf '  %-34s %6s %10s\n' "total job time" "" "$(_rp_stats_dur "${total}")"
 
   echo ""
-  echo "By job type"
-  echo "-----------"
-  printf '  %-32s %6s %10s %10s\n' "job" "runs" "median" "p90"
-
-  printf '%s\n' "${rows}" | awk -F'\t' '{print $3}' | sort -u | while IFS= read -r key; do
-    [ -n "${key}" ] || continue
-    set -- $(printf '%s\n' "${rows}" | awk -F'\t' -v k="${key}" '$3 == k {print $1}' | _rp_stats_quantiles)
-    printf '  %-32s %6s %10s %10s\n' "${key}" "$3" \
-      "$(_rp_stats_dur "$1")" "$(_rp_stats_dur "$2")"
-  done
-}
-
-_rp_stats_verdict() {
+  echo "This is a description, not an analysis. Grouping these durations by how"
+  echo "many jobs were running looks like it measures contention and does not:"
+  echo "a workflow runs its fast gates first and fans out to its heavy jobs, so"
+  echo "the heavy jobs are always the ones at high concurrency."
   echo ""
-  echo "What this can tell you"
-  echo "----------------------"
-  if [ "${1:-0}" -eq 0 ]; then
-    echo "  Not yet whether the runner count is right. That needs one job type"
-    echo "  measured properly at two different concurrency levels, and nothing"
-    echo "  has been so far: where the same job has run at two levels at all, one"
-    echo "  side of the comparison rests on a run or two."
-    echo ""
-    echo "  Waiting alone will not fix this. A workflow has a fixed shape, so it"
-    echo "  keeps producing the same jobs at the same concurrency however long it"
-    echo "  runs. Change the count deliberately, leave it for a week, and compare"
-    echo "  the same job across the two settings."
-  else
-    echo "  Read the first table only. If a job takes about the same time at"
-    echo "  higher concurrency, the machine is coping and the count could go up."
-    echo "  If it takes materially longer, the pool is oversubscribed. Anything"
-    echo "  with a handful of runs behind it is not yet evidence of much."
-  fi
+  echo "To work out what this machine actually wants, join these records to what"
+  echo "GitHub knows about the same runs, which adds the queue times the job"
+  echo "hook cannot see:"
+  echo ""
+  echo "  contrib/telemetry-join.sh > joined.tsv"
+  echo ""
+  echo "  records: ${f}"
 }
 
 # Seconds to something readable.

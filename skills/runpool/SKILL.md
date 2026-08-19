@@ -95,11 +95,32 @@ The JSON carries each pool's watched repositories and the paths to its logs, so 
 runpool set-count <pool> 4
 ```
 
-**More runners is not more throughput.** A single test job commonly forks one worker per core, so on a 14-core machine one job alone nearly saturates it. Several in parallel do not run faster, they thrash, and the first symptom is timing-sensitive tests failing for reasons unrelated to the code.
+**The standard argument is that more runners is not more throughput**, because a single test job commonly forks one worker per core, so several in parallel thrash rather than run faster. Treat that as an argument, not a fact. It may hold on a given machine and it may not, and the difference is measurable.
 
-**If red runs come and go, suspect contention before suspecting the code.** Lower the count, or cap per-job worker counts in the test runner. The job hook in `contrib/` stamps machine load into every job so this is visible in the log rather than guessed at.
+**If red runs come and go, suspect contention before suspecting the code.** Lower the count, or cap per-job worker counts in the test runner. The job hook in `contrib/` stamps machine load into every job so this is visible rather than guessed at.
 
 Resizing refuses while a job is running. Wait rather than forcing.
+
+## Answering "how many runners should this machine have"
+
+Telemetry plus GitHub can answer this properly. `runpool stats` deliberately will not: it describes what jobs cost and stops there, because every analysis baked into the tool is a blind spot with a version number.
+
+```bash
+contrib/telemetry-join.sh > joined.tsv
+```
+
+One row per job: duration, queue time, load at start, concurrency, and the raw created and started timestamps. Analyse that, do not trust a canned summary.
+
+**Four traps, each of which has produced a confidently wrong answer here.**
+
+- **Grouping duration by concurrency measures workload shape, not contention.** A workflow runs fast gate jobs first and fans out to heavy ones, so the heavy jobs are always the ones at peak concurrency. The buckets contain different work and comparing them is meaningless. Compare *within* a job type, always.
+- **Load is the better axis than concurrency.** Concurrency is pinned by the workflow's structure and barely varies. Load swings widely at the same concurrency depending on where sibling jobs are in their lifecycle, which gives real variation to correlate against. Note that load *at start* is a weak proxy for a job lasting several minutes.
+- **Queue time is not one thing.** A wait can be a cold pool waking, a dependency that has not finished, or no free runner. Only the last is fixed by more runners. Separate them by reconstructing, from the started and completed times, whether the pool was ever full during that job's wait. If a runner sat free throughout, more runners would not have helped.
+- **`created_at` is when the *run* was created, not when the job became runnable.** Every job in a workflow shares it, so occupancy at that instant is always zero and tells you nothing. Use the whole waiting interval.
+
+**The join key is `run_id` plus runner name.** The job hook records the workflow's job id (`check`) while the API reports its display name, so those never match.
+
+**What no observational data can give you is the ceiling.** Nothing in the record says what eight runners would do on a machine that has only ever run four. That needs changing the count and watching.
 
 ## Containers
 
