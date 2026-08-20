@@ -1,59 +1,60 @@
 <img src="assets/icon.png" width="88" alt="">
 
-# RunPool
+# RunPool: self-hosted GitHub Actions runner pools for macOS
 
-On-demand self-hosted GitHub Actions runner pools for macOS.
+[![CI](https://github.com/aicayzer/runpool/actions/workflows/ci.yml/badge.svg)](https://github.com/aicayzer/runpool/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/aicayzer/runpool)](https://github.com/aicayzer/runpool/releases)
+[![Licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-Runners come up when jobs queue and stand down when nothing has run for a while. Nothing sits in the background for a repository you are not touching, and nothing starts at login.
+Runners wake when jobs queue and stand down when nothing has run for a while. Nothing sits in the background for a repository you are not touching, and nothing starts at login.
 
-```
-runpool register acme --org acme-inc --count 4
-runpool schedule install
-runpool status
-```
+GitHub-hosted minutes are metered and macOS bills at ten times the Linux rate, so a busy repository gets expensive quickly. Self-hosted minutes are free, but GitHub's own runner is a poor houseguest on a machine you also use: it configures exactly one runner with no concept of a pool, gives you no way to change capacity afterwards, runs forever once started, and never cleans up. **RunPool makes it behave.**
 
-That is the whole setup. After it, pushes just work.
+There is a [Raycast extension](#raycast-extension) too.
 
-## Why this exists
+## Getting started
 
-GitHub-hosted Actions minutes are metered and macOS is billed at ten times the Linux rate. Running CI on a Mac you already own removes the meter entirely, because self-hosted minutes are free and drawn from a separate allowance.
-
-The official runner makes that harder than it should be:
-
-- **It configures exactly one runner.** There is no concept of a pool, and no count.
-- **There is no way to change capacity afterwards.** A pool of four is four separate installations, so resizing means creating or destroying whole runners.
-- **It runs forever once started.** GitHub's own guidance discourages persistent always-on runners, and offers nothing that stands them down.
-- **Nothing cleans up.** Work directories, diagnostics, superseded binaries and package stores accumulate until the disk is full.
-
-Every mature tool that solves this assumes Kubernetes, a cloud provider API, or ephemeral virtual machines. **One Mac running a few pools has no off-the-shelf answer**, which is the gap RunPool fills.
-
-## Install
-
-Requires macOS on Apple Silicon, and an authenticated [`gh`](https://cli.github.com).
+Requires macOS on Apple Silicon and an authenticated [`gh`](https://cli.github.com).
 
 ```bash
 brew install aicayzer/tap/runpool
+
+runpool register acme --org acme-inc --count 4
+runpool schedule install
 ```
 
-Or from source, which keeps the repository where you cloned it and symlinks `runpool` onto your PATH, so `git pull` updates the tool with no reinstall:
+Then point a workflow at the pool:
 
-```bash
-git clone https://github.com/aicayzer/runpool.git
-cd runpool && ./install.sh
+```yaml
+jobs:
+  test:
+    runs-on: [self-hosted, acme]
 ```
 
-## Concepts
+That is the whole setup. Better still, put the target behind a repository variable, so you can move a repo between hosted and self-hosted without editing workflows:
 
-**A pool is a set of runners bound to one GitHub scope.** GitHub offers repository, organisation and enterprise scopes and **no user-account scope**, which is the single most surprising thing about self-hosted runners. An organisation shares one pool across all its repositories; a personal repository needs its own, and cannot borrow an organisation's.
+```yaml
+runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+```
 
-**Capacity and routing are separate, deliberately.** Which runner a job lands on is decided by the workflow's `runs-on`. RunPool decides only whether the runners are running. A workflow pointed at a pool that happens to be down simply waits for it, rather than silently rerouting to a hosted runner that costs ten times as much.
+The tap is [aicayzer/homebrew-tap](https://github.com/aicayzer/homebrew-tap), and `brew upgrade runpool` updates it. To work from source instead, `./install.sh` symlinks `runpool` onto your PATH from wherever you cloned it, so `git pull` is the update.
+
+## How it works
+
+**A pool is a set of runners bound to one GitHub scope.** GitHub offers repository, organisation and enterprise scopes and **no user-account scope**, which is the most surprising thing about self-hosted runners. An organisation shares one pool across all its repositories; a personal repository needs its own and cannot borrow an organisation's.
+
+**Capacity and routing stay separate.** A workflow's `runs-on` decides where a job lands. RunPool decides only whether the runners are up, so a workflow pointed at a pool that is down waits for it rather than quietly rerouting to a hosted runner that costs ten times as much.
+
+**Two launch agents drive everything.** A tick every 60 seconds brings up pools with queued work, stands down idle ones, and checks their registrations are still live. A clean at 04:00 prunes work directories, caches and superseded binaries, skipping any pool mid-job. Only stopped pools are polled, so active work costs no API calls at all.
+
+The first job after a quiet spell waits about a minute for its pool to come up. Everything after that is immediate.
 
 ## Commands
 
-| | |
+| Command | |
 |---|---|
 | `register <pool> --repo OWNER/REPO\|--org ORG [--count N]` | Create a pool and configure its runners |
-| `set-count <pool> N` | Change a pool's runner count after registration |
+| `set-count <pool> N` | Change a pool's runner count |
 | `up` / `down <pool>` | Bring a pool online, or stand it down |
 | `status [--json]` | Local state alongside what GitHub actually sees |
 | `pools` | List registered pools |
@@ -64,80 +65,37 @@ cd runpool && ./install.sh
 | `pause` / `resume` | Global kill switch |
 | `schedule install\|remove` | The background agents that drive everything above |
 
-## How on-demand works
+**`status --json --local` skips the GitHub query**, reporting those fields as `null`. Anything refreshing on a timer should use it: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
 
-`schedule install` writes two launch agents.
+`skills/runpool/` is an agent skill for *using* RunPool: wiring a repository to local CI, choosing a scope, and diagnosing a job that queues and never starts.
 
-- **A tick every 60 seconds.** It brings up any pool with queued work, stands down pools idle past the threshold, checks for contention, and checks that registrations are still live. Only *stopped* pools are polled, so during active work it makes no API calls at all.
-- **A clean at 04:00.** It skips any pool with a job running, and retries later once things are genuinely idle rather than waiting another day.
+## Raycast extension
 
-First job after a quiet spell waits about a minute for its pool to come up. Everything after that is immediate.
+<img src="assets/raycast.png" width="640" alt="The RunPool Raycast extension listing three runner pools">
 
-## `status` tells you what GitHub thinks
+Start and stop pools, change runner counts, disable local CI and see what is running, without a terminal. An optional menu bar readout and a set of AI tools come with it.
 
-```
-GLOBAL: active
-  acme       org  acme-inc              running 4/4  busy 2  github 4/4
-  sideproj   repo me/side-project       running 0/2  busy 0  github 0/2
-```
+**In review for the Raycast store** ([raycast/extensions#30343](https://github.com/raycast/extensions/pull/30343)). Until it lands, run it from a clone of that branch with `npm install && npm run dev`.
 
-**The GitHub column is not decoration.** GitHub prunes the registration of a runner that has not connected for a long time. The local install is unaffected and still looks entirely healthy: it starts, it connects, and it picks up nothing, so jobs queue forever against a pool that reports as running. Reporting only the local view hid exactly that for three weeks. `runpool reregister <pool>` fixes it.
+## Notifications
 
-`status --json` gives the same thing machine-readably, including each pool's watched repositories and the paths to its logs.
-
-**`status --json --local` skips the GitHub query entirely**, reporting those two fields as `null`. Anything refreshing on a timer should use it: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
-
-**`contrib/demo-status.sh` answers `status` with invented pools**, in the same shape and needing no runners, no repositories and no GitHub account. Point anything that reads RunPool's JSON at it to develop or demonstrate against a fixed, presentable machine. It ignores every other command, so nothing it is wired to can change a real pool.
-
-## `stats` and the runner-count question
-
-Set `RUNPOOL_JOB_HOOK` and `RUNPOOL_TELEMETRY=1` and every job records its duration, the machine's load, and how many jobs were already running when it started. `runpool stats` reads that back.
-
-**The obvious analysis is the wrong one.** Grouping durations by concurrency looks like it answers "does the machine slow down under load", and does not. A workflow has a fixed shape: a couple of fast gate jobs, then a fan-out of heavy ones. The heavy jobs are therefore exactly the ones running when concurrency is highest, so the table shows durations climbing steeply with concurrency on a machine that is coping perfectly well. The workload changed, not the machine.
-
-**So `stats` does not try to answer it.** It describes what jobs cost and stops, because an analysis baked into a tool is a blind spot with a version number, and the first one here reported a contention effect that was pure artefact.
-
-**The answer comes from the records plus GitHub.** `contrib/telemetry-join.sh` emits one row per job with duration, queue time, load and the raw timestamps, joined to what GitHub knows about the same run. Queue time is the figure that matters, because more runners help if and only if work is waiting, and it is invisible locally: the job hook only fires once a runner has already picked the job up.
-
-Read that carefully too. A wait can be a cold pool waking, a dependency that has not finished, or genuinely no free runner, and only the last is fixed by more runners. The runpool skill sets out how to tell them apart.
-
-## Notifications are optional and external
-
-RunPool detects. It does not deliver.
-
-Set `RUNPOOL_NOTIFY_CMD` to any command that reads one JSON object on stdin:
+RunPool detects. It does not deliver. Set `RUNPOOL_NOTIFY_CMD` to any command reading one JSON object on stdin:
 
 ```json
-{
-  "source": "runpool",
-  "severity": "warning",
-  "title": "CI contention on my-mac: load 163, 5 jobs",
-  "key": "runpool/contention/my-mac",
-  "detail": "A timing-sensitive test failing right now is more likely to be the machine than a defect.",
-  "fields": { "Load average": "163", "Jobs running": "5" }
-}
+{ "severity": "warning", "title": "CI contention on my-mac: load 163, 5 jobs", "key": "runpool/contention/my-mac" }
 ```
 
-Unset, RunPool reports nothing and works exactly as well. There is no mail sending here, no address routing, no severity policy and no dedup window, because none of that is this tool's business. `contrib/notify-webhook.sh` is a reference implementation.
+Unset, it reports nothing and works as well. `contrib/notify-webhook.sh` is a reference implementation and shows the full shape.
 
-**Two things are reported**, both about the pool's own health: the machine being too contended to trust a result, and runners that are running but unreachable. Failed workflow runs are deliberately *not* reported, because watching CI results is a job for something that does not depend on this laptop being awake.
+**Two things are reported**, both about the pool's own health: a machine too contended to trust a result, and runners that are up but unreachable. Failed workflow runs deliberately are not, because watching CI results should not depend on this laptop being awake.
 
 ## Things worth knowing
 
-- **Public repositories are refused at registration.** A pull request from an untrusted fork runs its own workflow file, so wiring one to a self-hosted runner hands any stranger a shell on your machine. This is a refusal, not a warning.
-- **`services:` and `container:` do not force a hosted runner.** Those two workflow keys are Linux-only, but an ordinary `docker run` inside a step works anywhere Docker does, including here. Reach for that before accepting hosted spend.
-- **More runners is not obviously more throughput.** A single test job commonly forks one worker per core, so several at once may oversubscribe the machine and time out tests that are not actually broken. That is the standard argument, it is repeated confidently everywhere including in older versions of this file, and it is worth knowing that it is an argument rather than a measurement. `runpool stats` is here to settle it on your machine rather than in the abstract.
-- **Per-runner package caches are load-bearing.** All runners share one HOME, so each gets its own pnpm store and npm cache. Without that, concurrent installs collide.
-- **Ephemeral macOS VMs are capped at two per machine**, by Apple's licence and enforced by the Virtualization framework. If you need more than two parallel macOS jobs, that whole family of tools is unavailable to you, which is part of why this one exists.
+- **Public repositories are refused at registration.** A pull request from an untrusted fork runs its own workflow file, so wiring one to a self-hosted runner hands any stranger a shell on your machine. A refusal, not a warning.
+- **A runner can look healthy while GitHub has dropped it.** GitHub prunes registrations that have not connected for a long time. The local install still starts and connects and then picks up nothing, so jobs queue forever against a pool reporting as running. That is what the `github` column in `status` is for, and `reregister` fixes it.
+- **`services:` and `container:` do not force a hosted runner.** Those two workflow keys are Linux-only, but an ordinary `docker run` inside a step works anywhere Docker does, including here.
+- **More runners is not obviously more throughput**, and the contention warning scales with pool size: it defaults to six times core count, while a busy pool of N runners reaches roughly N times core count on its own. `runpool stats` and `contrib/telemetry-join.sh` settle both questions on your machine, using queue time rather than argument.
 
-## macOS only
+## Not on a Mac?
 
-launchd, `sysctl`, `~/Library` paths and the `osx-arm64` runner build. This is not an oversight: Linux and Windows are well served by [actions-runner-controller](https://github.com/actions/actions-runner-controller), [garm](https://github.com/cloudbase/garm) and others, and generalising would mean competing where there is no gap.
-
-## For agents
-
-`AGENTS.md` covers working on this repository. `skills/runpool/` is an agent skill for *using* it: wiring a repository to local CI, choosing a scope, and diagnosing a job that queues and never starts. Install it with your agent's usual skill mechanism, or point at the directory.
-
-## Licence
-
-MIT.
+Linux and Windows are already well served by [actions-runner-controller](https://github.com/actions/actions-runner-controller) and [garm](https://github.com/cloudbase/garm). macOS-only here is a choice rather than an unfinished port: launchd, `sysctl`, `~/Library` paths and the `osx-arm64` runner build go all the way through.
