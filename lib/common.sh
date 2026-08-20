@@ -122,6 +122,23 @@ _rp_self_path() { echo "${RUNPOOL_SELF:-$0}"; }
 # ---------------------------------------------------------------------------
 _rp_pool_conf() { echo "${RUNPOOL_POOL_DIR}/$1.conf"; }
 
+# A pool name becomes four different things: a config file path, a runner
+# directory, a launchd label, and a bare string in the status JSON. It is
+# constrained here to what is safe in all four, which is also what lets
+# _rp_status_json assemble JSON without escaping anything.
+#
+# A 'case' glob rather than a bash regex, because stock bash 3.2 treats a
+# quoted and an unquoted right-hand side of =~ differently and the difference
+# is easy to get wrong. '.' and '..' pass a character-class test and are still
+# path hazards, so they are rejected by name.
+_rp_valid_pool_name() {
+  case "$1" in
+    ''|.|..)           return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
 # Load POOL_* for pool $1 into the caller's scope. POOL_WATCH is optional and
 # only set on org pools, so every reader must use "${POOL_WATCH:-}".
 _rp_load_pool() {

@@ -76,9 +76,11 @@ _rp_status() {
 
 # Machine-readable status, so anything wrapping this tool reads structured data
 # rather than scraping prose. Hand-assembled rather than shelled out to jq,
-# because none of these values can contain a character needing escaping: pool
-# names, targets and watched repos are all GitHub identifiers, and the rest are
-# integers or fixed strings.
+# because none of these values can contain a character needing escaping:
+# targets and watched repos are GitHub identifiers, pool names are constrained
+# by _rp_valid_pool_name at register, and the rest are integers or fixed
+# strings. That validation is what makes this safe; before it existed a pool
+# name containing a double quote produced malformed JSON here.
 #
 # $1 local_only: skip the GitHub query and report its two fields as null.
 # A caller refreshing on a timer must use it. One API call per pool per minute
