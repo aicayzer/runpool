@@ -53,7 +53,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 
 | Command | |
 |---|---|
-| `register <pool> --repo OWNER/REPO\|--org ORG [--count N]` | Create a pool and configure its runners |
+| `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--allow-public]` | Create a pool and configure its runners |
 | `set-count <pool> N` | Change a pool's runner count |
 | `up` / `down <pool>` | Bring a pool online, or stand it down |
 | `status [--json]` | Local state alongside what GitHub actually sees |
@@ -91,7 +91,8 @@ Unset, it reports nothing and works as well. `contrib/notify-webhook.sh` is a re
 
 ## Things worth knowing
 
-- **Public repositories are refused at registration.** A pull request from an untrusted fork runs its own workflow file, so wiring one to a self-hosted runner hands any stranger a shell on your machine. A refusal, not a warning.
+- **A public repository is refused at registration**, because a pull request from an untrusted fork runs its own workflow file, which would hand any stranger a shell on your machine. `--allow-public` overrides it with a warning, so the decision is explicit rather than pushed into a forked copy of the tool. Registration also refuses when visibility cannot be determined, rather than assuming private.
+- **For an organisation, that control is GitHub's, not RunPool's.** A runner group carries `allows_public_repositories`, it is `false` by default, and runners land in the default group, so public repos in the org do not get them. RunPool reads that setting when you register and warns only if it has been turned on. [SECURITY.md](SECURITY.md) covers the whole picture, including what RunPool deliberately does not do.
 - **A runner can look healthy while GitHub has dropped it.** GitHub prunes registrations that have not connected for a long time. The local install still starts and connects and then picks up nothing, so jobs queue forever against a pool reporting as running. That is what the `github` column in `status` is for, and `reregister` fixes it.
 - **`services:` and `container:` do not force a hosted runner.** Those two workflow keys are Linux-only, but an ordinary `docker run` inside a step works anywhere Docker does, including here.
 - **More runners is not obviously more throughput**, and the contention warning scales with pool size: it defaults to six times core count, while a busy pool of N runners reaches roughly N times core count on its own. `runpool stats` and `contrib/telemetry-join.sh` settle both questions on your machine, using queue time rather than argument.
