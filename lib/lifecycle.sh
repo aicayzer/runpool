@@ -16,13 +16,19 @@ _rp_register() {
 
   local name="$1"; shift
   [ -n "${name}" ] || { _rp_err "usage: runpool register <pool> --repo OWNER/REPO|--org ORG [--count N]"; return 1; }
+  _rp_valid_pool_name "${name}" || {
+    _rp_err "invalid pool name: '${name}'"
+    _rp_err "Letters, digits, dot, underscore and hyphen only: the name becomes a directory, a launch-agent label and a JSON field."
+    return 1
+  }
 
-  local scope="" target="" count="2"
+  local scope="" target="" count="2" allow_public=0 vis="" pub=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo)  scope="repo"; target="$2"; shift 2 ;;
-      --org)   scope="org";  target="$2"; shift 2 ;;
-      --count) count="$2";   shift 2 ;;
+      --repo)         scope="repo"; target="$2"; shift 2 ;;
+      --org)          scope="org";  target="$2"; shift 2 ;;
+      --count)        count="$2";   shift 2 ;;
+      --allow-public) allow_public=1; shift ;;
       *) _rp_err "unknown flag: $1"; return 1 ;;
     esac
   done
@@ -30,15 +36,60 @@ _rp_register() {
   case "${count}" in ''|*[!0-9]*) _rp_err "--count must be a positive integer"; return 1 ;; esac
   [ "${count}" -ge 1 ] || { _rp_err "--count must be at least 1"; return 1; }
 
-  # A public repository is refused outright rather than warned about. A pull
-  # request from an untrusted fork runs its own workflow file, so wiring one to
-  # a self-hosted runner hands any stranger a shell on this machine.
+  # Whose job the public-repository check is depends on the scope, and the two
+  # cases are genuinely different.
+  #
+  # At REPOSITORY scope it is RunPool's, because GitHub has no per-repository
+  # equivalent of the runner group's allows_public_repositories. A pull request
+  # from an untrusted fork runs its own workflow file, so wiring a public repo
+  # to a self-hosted runner hands any stranger a shell on this machine.
+  #
+  # Refused by default rather than absolutely. A refusal with no way past it
+  # invites a forked copy of the tool or a hand-registered runner, and neither
+  # is visible here afterwards; an explicit flag keeps the decision in the open.
   if [ "${scope}" = "repo" ]; then
-    local vis; vis=$(gh repo view "${target}" --json visibility --jq '.visibility' 2>/dev/null)
-    if [ "${vis}" = "PUBLIC" ]; then
-      _rp_err "${target} is PUBLIC — refusing to register self-hosted runners on a public repo."
-      return 1
-    fi
+    vis=$(gh repo view "${target}" --json visibility --jq '.visibility' 2>/dev/null)
+    case "${vis}" in
+      PRIVATE|INTERNAL) ;;
+      PUBLIC)
+        if [ "${allow_public}" = "1" ]; then
+          _rp_log "WARNING: ${target} is PUBLIC and --allow-public was given. Any fork's pull request can run its own workflow file here, as your user. Require approval for fork pull requests on that repository."
+        else
+          _rp_err "${target} is PUBLIC — refusing to register self-hosted runners on a public repo."
+          _rp_err "A pull request from any fork would run its own workflow file here, as your user."
+          _rp_err "If that is genuinely what you want: runpool register ${name} --repo ${target} --allow-public"
+          return 1
+        fi
+        ;;
+      *)
+        # Fails closed. An empty answer means the API call failed, not that the
+        # repository is private, and treating those the same skipped the check
+        # exactly when GitHub was being unreliable.
+        _rp_err "could not determine the visibility of ${target} — refusing."
+        _rp_err "Check 'gh auth status' and that the repository exists, then retry."
+        return 1
+        ;;
+    esac
+  else
+    # At ORGANISATION scope it is GitHub's, and GitHub already defaults it
+    # safely. A runner group carries allows_public_repositories, it is false by
+    # default, and runners registered here land in the default group because
+    # config.sh is never passed --runnergroup. So report GitHub's setting;
+    # do not enumerate the org's public repositories and re-derive the answer.
+    #
+    # A warning rather than a refusal, and no failing closed, precisely because
+    # this is not RunPool's control to enforce.
+    pub=$(gh api "/orgs/${target}/actions/runner-groups" \
+            --jq '[.runner_groups[] | select(.default == true) | .allows_public_repositories][0]' 2>/dev/null)
+    case "${pub}" in
+      true)
+        _rp_log "WARNING: the default runner group on ${target} has allows_public_repositories=true, so public repositories in that organisation can use these runners. Turn it off in the organisation's Actions runner-group settings unless that is deliberate."
+        ;;
+      false) ;;
+      *)
+        _rp_log "note: could not read the runner groups for ${target} (needs admin:org). Whether public repositories there can use these runners is GitHub's allows_public_repositories setting, in the organisation's Actions settings."
+        ;;
+    esac
   fi
 
   local dir_base labels tarball i runner_dir runner_name token
