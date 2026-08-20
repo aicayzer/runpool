@@ -307,7 +307,7 @@ _rp_write_plist() {
     <key>npm_config_cache</key>
     <string>${dir}/.npm-cache</string>
     <key>TMPDIR</key>
-    <string>${dir}/.tmp</string>
+    <string>${dir}/tmp</string>
 PLIST
     if [ -n "${hook}" ]; then
       cat <<PLIST
@@ -342,6 +342,14 @@ PLIST
 # running app, so a job that leaks there cannot be swept safely; one test suite
 # once left 633k directories and 178GB behind. Pointing each runner at its own
 # temp makes that leak collectable, which is what 'runpool clean' collects.
+#
+# TMPDIR is deliberately NOT dot-led, unlike the caches beside it. Library code
+# roots things at os.tmpdir() without knowing where that points, and a dotted
+# component in the absolute path silently disables anything applying
+# dotfile-ignore rules to it. A file watcher rooted there ignored its whole tree
+# and failed every run of one repository's suite for eight days, load
+# independent, before anyone traced it to the path. The caches keep their dots
+# because only npm and pnpm read them, and neither walks its own cache.
 
 # Regenerate every pool's agents from its config. A running pool picks the
 # change up on its next down/up; a stopped pool on its next up.
