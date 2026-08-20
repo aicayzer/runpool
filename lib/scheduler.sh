@@ -227,13 +227,21 @@ _rp_clean() {
 
       # Per-runner temp. Safe to wipe wholesale: nothing but this runner's own
       # jobs ever writes here, which is the entire reason it is redirected.
-      td="${rd}/.tmp"
-      if [ -d "${td}" ]; then
-        sz=$(du -sk "${td}" 2>/dev/null | awk '{print $1}')
-        find "${td:?}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
-        freed_kb=$(( freed_kb + ${sz:-0} ))
-      fi
-      mkdir -p "${td}" 2>/dev/null
+      #
+      # Both names are swept. TMPDIR moved from '.tmp' to 'tmp' because a dotted
+      # component in the absolute path silently disables anything applying
+      # dotfile-ignore rules to it. An install predating the rename still holds
+      # the old directory, which would otherwise sit uncollected forever.
+      for td in "${rd}/tmp" "${rd}/.tmp"; do
+        if [ -d "${td}" ]; then
+          sz=$(du -sk "${td}" 2>/dev/null | awk '{print $1}')
+          find "${td:?}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
+          freed_kb=$(( freed_kb + ${sz:-0} ))
+        fi
+      done
+      # The legacy directory goes for good once emptied; the current one stays.
+      rmdir "${rd}/.tmp" 2>/dev/null
+      mkdir -p "${rd}/tmp" 2>/dev/null
 
       # Runner diagnostics. Rotated loosely and reaching ~150MB per runner. Job
       # logs live in the GitHub UI, so nothing here is the only copy.
