@@ -69,6 +69,12 @@ Environment, then config file, then built-in default. The config file uses plain
 ```bash
 /bin/bash -n bin/runpool lib/*.sh contrib/*.sh install.sh   # parse under stock bash
 shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh install.sh
+
+# CI runs exactly that. Without shellcheck installed, Docker gives the same
+# result and leaves nothing behind — skipping the check is how CI goes red
+# unnoticed:
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
+  --severity=warning bin/runpool lib/*.sh contrib/*.sh install.sh
 ```
 
 **Test against a scratch directory, never a real installation:**

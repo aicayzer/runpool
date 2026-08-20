@@ -56,7 +56,7 @@ _rp_stats_quantiles() {
 }
 
 _rp_stats() {
-  local f rows n_done first last cores peak_load total key
+  local f rows n_done first last cores peak_load total key median p90 runs
 
   f="$(_rp_stats_file)"
 
@@ -95,8 +95,13 @@ _rp_stats() {
   printf '  %-34s %6s %10s %10s\n' "job" "runs" "median" "p90"
   printf '%s\n' "${rows}" | awk -F'\t' '{print $2}' | sort -u | while IFS= read -r key; do
     [ -n "${key}" ] || continue
-    set -- $(printf '%s\n' "${rows}" | awk -F'\t' -v k="${key}" '$2 == k {print $1}' | _rp_stats_quantiles)
-    printf '  %-34s %6s %10s %10s\n' "${key}" "$3" "$(_rp_stats_dur "$1")" "$(_rp_stats_dur "$2")"
+    # Split on the tab the quantile helper emits, rather than on `set --` with
+    # an unquoted expansion. Same result, without relying on word splitting.
+    IFS="$(printf '\t')" read -r median p90 runs <<EOF
+$(printf '%s\n' "${rows}" | awk -F'\t' -v k="${key}" '$2 == k {print $1}' | _rp_stats_quantiles)
+EOF
+    printf '  %-34s %6s %10s %10s\n' "${key}" "${runs}" \
+      "$(_rp_stats_dur "${median}")" "$(_rp_stats_dur "${p90}")"
   done
 
   total=$(printf '%s\n' "${rows}" | awk -F'\t' '{s+=$1} END {print s+0}')
