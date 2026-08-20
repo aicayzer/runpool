@@ -18,6 +18,7 @@ Break any of these and the tool stops being what it is.
 - **No workflow-result watching.** Reporting on failed CI runs is observability and belongs to whatever receives the notifications, which can poll GitHub without depending on a laptop being awake. This tool reports only on the health of the pool itself.
 - **Nothing personal in the repository.** No real organisation names, repository names, hostnames, addresses or paths, in code, comments, docs or examples. Use `acme` / `acme-inc` / `me/side-project`. Installation specifics belong in the user's config file, never here.
 - **No secrets, ever.** Registration credentials live in the runtime directory, which is outside this repo by design. Nothing in a checkout should reveal anything about the machine it came from.
+- **The public-repository check sits at whichever layer owns it, and the asymmetry is deliberate.** At *repository* scope it is RunPool's, because GitHub has no per-repository equivalent: `register` refuses by default, refuses again when visibility cannot be resolved, and takes `--allow-public` as an explicit, warned override. At *organisation* scope it is GitHub's: a runner group carries `allows_public_repositories`, it defaults to `false`, and runners land in the default group because `config.sh` is never passed `--runnergroup`. So RunPool reads and reports that setting and nothing more. **Do not enumerate an organisation's public repositories to re-derive the answer**, and do not "even up" the two branches. They differ because the controls differ. See `SECURITY.md`, which states this for users.
 
 ## Layout
 
@@ -103,4 +104,4 @@ The pattern is already established: configuration precedence was found and fixed
 
 ## This repository's own CI
 
-**Pinned to GitHub-hosted runners, permanently.** This repo is public, so a pull request from an untrusted fork runs its own workflow file. RunPool refuses to register a public repository for exactly that reason, and it would be absurd for the tool to break its own rule.
+**Pinned to GitHub-hosted runners, permanently.** This repo is public, so a pull request from an untrusted fork runs its own workflow file. RunPool refuses to register a public repository for exactly that reason, and it would be absurd for the tool to break its own rule. `--allow-public` exists for users who have weighed the risk on their own machine; it is not licence to point this repository at a pool.

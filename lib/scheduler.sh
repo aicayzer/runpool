@@ -76,9 +76,11 @@ _rp_status() {
 
 # Machine-readable status, so anything wrapping this tool reads structured data
 # rather than scraping prose. Hand-assembled rather than shelled out to jq,
-# because none of these values can contain a character needing escaping: pool
-# names, targets and watched repos are all GitHub identifiers, and the rest are
-# integers or fixed strings.
+# because none of these values can contain a character needing escaping:
+# targets and watched repos are GitHub identifiers, pool names are constrained
+# by _rp_valid_pool_name at register, and the rest are integers or fixed
+# strings. That validation is what makes this safe; before it existed a pool
+# name containing a double quote produced malformed JSON here.
 #
 # $1 local_only: skip the GitHub query and report its two fields as null.
 # A caller refreshing on a timer must use it. One API call per pool per minute
@@ -303,7 +305,34 @@ _rp_clean_if_overdue() {
   fi
 }
 
-_rp_tick() { _rp_autoscale; _rp_sweep; _rp_load_check; _rp_health_check; _rp_clean_if_overdue; }
+# A tick polls every watched repository of every pool that is down, one API
+# call each, so a pool watching a dozen repos against a slow GitHub can still
+# be working when launchd starts the next tick on its 60-second interval. Two
+# ticks then interleave autoscale and sweep over the same activity timestamp.
+#
+# mkdir is the lock: it is atomic on every POSIX filesystem, and macOS has no
+# flock. The stale break exists so a killed tick cannot wedge the scheduler
+# permanently; 900s is far longer than any real tick and far shorter than the
+# time anyone would take to notice.
+RUNPOOL_TICK_LOCK="${RUNPOOL_STATE_DIR}/tick.lock"
+RUNPOOL_TICK_STALE=900
+
+_rp_tick() {
+  local age
+  if ! mkdir "${RUNPOOL_TICK_LOCK}" 2>/dev/null; then
+    age=$(( $(_rp_now) - $(stat -f %m "${RUNPOOL_TICK_LOCK}" 2>/dev/null || echo 0) ))
+    if [ "${age}" -lt "${RUNPOOL_TICK_STALE}" ]; then
+      return 0   # a tick is already running; skipping is the whole point
+    fi
+    _rp_log "tick: breaking a stale lock (${age}s old)"
+    rm -rf "${RUNPOOL_TICK_LOCK}"
+    mkdir "${RUNPOOL_TICK_LOCK}" 2>/dev/null || return 0
+  fi
+  trap 'rm -rf "${RUNPOOL_TICK_LOCK}"' EXIT INT TERM
+  _rp_autoscale; _rp_sweep; _rp_load_check; _rp_health_check; _rp_clean_if_overdue
+  rm -rf "${RUNPOOL_TICK_LOCK}"
+  trap - EXIT INT TERM
+}
 
 # ---------------------------------------------------------------------------
 # pause / resume — global kill switch, default resumed

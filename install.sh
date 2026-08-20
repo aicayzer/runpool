@@ -34,6 +34,9 @@ echo "linked ${PREFIX}/runpool -> ${ROOT}/bin/runpool"
 mkdir -p "${CONFIG_DIR}"
 if [ ! -f "${CONFIG_DIR}/config" ]; then
   cp "${ROOT}/runpool.conf.example" "${CONFIG_DIR}/config"
+  # The config is where a webhook token goes, and the default umask of 022
+  # would leave it readable by every other user on the machine.
+  chmod 600 "${CONFIG_DIR}/config"
   echo "wrote ${CONFIG_DIR}/config (all defaults, edit as needed)"
 else
   echo "kept existing ${CONFIG_DIR}/config"

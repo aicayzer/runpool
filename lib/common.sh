@@ -122,6 +122,23 @@ _rp_self_path() { echo "${RUNPOOL_SELF:-$0}"; }
 # ---------------------------------------------------------------------------
 _rp_pool_conf() { echo "${RUNPOOL_POOL_DIR}/$1.conf"; }
 
+# A pool name becomes four different things: a config file path, a runner
+# directory, a launchd label, and a bare string in the status JSON. It is
+# constrained here to what is safe in all four, which is also what lets
+# _rp_status_json assemble JSON without escaping anything.
+#
+# A 'case' glob rather than a bash regex, because stock bash 3.2 treats a
+# quoted and an unquoted right-hand side of =~ differently and the difference
+# is easy to get wrong. '.' and '..' pass a character-class test and are still
+# path hazards, so they are rejected by name.
+_rp_valid_pool_name() {
+  case "$1" in
+    ''|.|..)           return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
 # Load POOL_* for pool $1 into the caller's scope. POOL_WATCH is optional and
 # only set on org pools, so every reader must use "${POOL_WATCH:-}".
 _rp_load_pool() {
@@ -171,23 +188,47 @@ _rp_scope_path() {
 # ---------------------------------------------------------------------------
 # Fetch the latest osx-arm64 runner tarball once and echo its local path.
 _rp_fetch_runner_tarball() {
-  local url path jqf attempt
+  local out url digest path tmp jqf attempt sum
   # '[.]' matches a literal dot without a backslash, which keeps this filter
-  # safe to carry through shells that mangle escapes.
-  jqf='[.assets[] | select(.name | test("osx-arm64.*[.]tar[.]gz$")) | .browser_download_url][0]'
+  # safe to carry through shells that mangle escapes. The digest comes back as
+  # "sha256:..." and is empty on a release that does not publish one.
+  jqf='[.assets[] | select(.name | test("osx-arm64.*[.]tar[.]gz$"))
+        | "\(.browser_download_url) \(.digest // "")"][0] // ""'
   # releases/latest intermittently returns empty under secondary rate limiting,
   # so retry with backoff. Once cached this is skipped entirely.
   for attempt in 1 2 3 4 5; do
-    url=$(gh api repos/actions/runner/releases/latest --jq "${jqf}" 2>/dev/null)
-    [ -n "${url}" ] && break
+    out=$(gh api repos/actions/runner/releases/latest --jq "${jqf}" 2>/dev/null)
+    [ -n "${out}" ] && break
     sleep $(( attempt * 2 ))
   done
+  url="${out%% *}"; digest="${out#* }"
   [ -n "${url}" ] || { _rp_err "could not resolve the osx-arm64 runner tarball after retries"; return 1; }
   path="${RUNPOOL_BASE}/.cache/${url##*/}"
   mkdir -p "${RUNPOOL_BASE}/.cache" 2>/dev/null
   if [ ! -f "${path}" ]; then
     _rp_log "downloading runner: ${url##*/}"
-    curl -sSL "${url}" -o "${path}" || return 1
+    # '-f' so an HTTP error is a failure. Without it curl writes the error body
+    # to the output path and exits 0, and the "already cached" test above then
+    # trusts that file forever: every later tar fails and nothing says why.
+    #
+    # Downloaded under a temporary name in the same directory and moved into
+    # place only once it is complete and verified, so an interrupted fetch
+    # cannot leave a partial file behind either.
+    tmp="${path}.part.$$"
+    curl -fsSL "${url}" -o "${tmp}" || {
+      rm -f "${tmp}"; _rp_err "download failed: ${url}"; return 1; }
+    # The release publishes a sha256 and shasum is stock on macOS, so verifying
+    # costs one field in the filter above and no new dependency. A release
+    # without a digest is skipped rather than refused.
+    if [ -n "${digest}" ]; then
+      sum="$(shasum -a 256 "${tmp}" 2>/dev/null | awk '{print $1}')"
+      if [ "${sum}" != "${digest#sha256:}" ]; then
+        rm -f "${tmp}"
+        _rp_err "checksum mismatch on ${url##*/}: expected ${digest#sha256:}, got ${sum:-none}"
+        return 1
+      fi
+    fi
+    mv -f "${tmp}" "${path}" || { rm -f "${tmp}"; return 1; }
   fi
   echo "${path}"
 }

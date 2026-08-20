@@ -63,9 +63,17 @@ Then set the repository variable `CI_RUNNER` to `self-hosted`. The fallback keep
 
 ## Never wire a public repository
 
-`runpool register` refuses one outright. A pull request from an untrusted fork runs its own workflow file, so a public repo on a self-hosted runner hands any stranger a shell on the machine. Do not look for a way around this.
+A pull request from an untrusted fork runs its own workflow file, so a public repo on a self-hosted runner hands any stranger a shell on the machine, as the user who owns it.
+
+**`runpool register --repo` refuses a public repository**, and refuses again if it cannot determine visibility rather than assuming private. There is an `--allow-public` override that warns and proceeds. **Do not reach for it on the user's behalf.** It exists so the decision is explicit rather than made in a forked copy of the tool; suggest it only if the user has said they understand the exposure, and pair it with fork pull request approval below.
+
+**For an organisation, this is GitHub's control, not RunPool's.** The runner group setting `allows_public_repositories` defaults to `false`, and runners register into the default group, so public repos in the org do not get them. `register --org` reads that setting and warns only when it has been switched on. If it warns, the fix is in the organisation's Actions runner-group settings, not in runpool.
+
+**Private is not the same as safe.** Anyone who can fork a private repo and open a pull request, which usually means anyone with read access, can run code on the pool. Set **Settings → Actions → General → Fork pull request workflows** to require approval for outside contributors on any repository pointed at a pool. RunPool cannot enforce this and will not know whether it is set.
 
 Keep publish, deploy and OIDC jobs on hosted runners too: npm provenance requires it.
+
+`SECURITY.md` in the repo is the fuller statement, including why persistent runners are a deliberate choice and why JIT tokens are not used.
 
 ## Diagnosing "the job is queued and nothing happens"
 
@@ -139,6 +147,7 @@ RunPool ships with **no notifier** and works fully without one. Set `RUNPOOL_NOT
 ## Things that will bite
 
 - **Registration credentials live in the runtime directory**, not the repo. Never commit one, never copy one between machines.
+- **Pool names are validated at `register`**: letters, digits, dot, underscore and hyphen. The name becomes a directory, a launch-agent label and a JSON field, so anything else is refused rather than sanitised.
 - **All runners share one HOME**, so each needs its own package store and cache. runpool sets this in the launch agent; if you hand-edit an agent, preserve it or concurrent installs collide.
 - **Ephemeral macOS VMs are capped at two per machine** by Apple's licence. If someone suggests Tart, Tartelet or Cilicon for more than two parallel macOS jobs, that ceiling is why it will not work.
 - **Nothing watches RunPool itself.** This is an accepted gap, not an oversight. Do not build a heartbeat for it.

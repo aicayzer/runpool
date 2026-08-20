@@ -46,8 +46,9 @@ _rp_help() {
   cat <<'HELP'
 runpool — on-demand self-hosted GitHub Actions runner pools for macOS
 
-  register <pool> --repo OWNER/REPO|--org ORG [--count N]
+  register <pool> --repo OWNER/REPO|--org ORG [--count N] [--allow-public]
                            create a pool and configure its runners (left stopped)
+                           a public repo is refused; --allow-public overrides it
   set-count <pool> N       change a pool's runner count after registration
   up|down <pool>           bring a pool online / stand it down
   up-all|down-all          every pool
