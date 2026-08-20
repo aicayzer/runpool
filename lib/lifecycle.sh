@@ -88,6 +88,14 @@ CONF
 # takes no count, so a pool of N is N separate installations and changing N
 # means creating or destroying whole runners. Hiding that is why this exists.
 # ---------------------------------------------------------------------------
+# POOL_COUNT is written in two places and in a different order depending on
+# whether the pool is growing or shrinking, so it lives in one function.
+_rp_write_pool_count() {
+  local conf; conf="$(_rp_pool_conf "$1")"
+  sed "s/^POOL_COUNT=.*/POOL_COUNT=\"$2\"/" "${conf}" >| "${conf}.tmp" \
+    && mv -f "${conf}.tmp" "${conf}"
+}
+
 _rp_set_count() {
   _rp_require gh || return 1
   local name="$1" want="$2"
@@ -131,6 +139,16 @@ _rp_set_count() {
       i=$(( i + 1 ))
     done
   else
+    # Write the smaller count before deleting anything.
+    #
+    # A scheduler tick landing mid-shrink otherwise reads a POOL_COUNT that no
+    # longer matches the agents on disk, so bringing the pool up fails on a
+    # plist that has just been removed. That failure returns before the
+    # activity timestamp is touched, and the sweep in the same tick then stands
+    # every pool down on stale idle data — including one autoscale was trying
+    # to start for queued work. Shrinking first makes any tick in the window
+    # see the smaller pool, which is entirely valid.
+    _rp_write_pool_count "${name}" "${want}"
     i=$(( want + 1 ))
     while [ "${i}" -le "${have}" ]; do
       runner_dir="${POOL_DIR}/runner-${i}"
@@ -147,8 +165,11 @@ _rp_set_count() {
     done
   fi
 
-  local conf; conf="$(_rp_pool_conf "${name}")"
-  sed "s/^POOL_COUNT=.*/POOL_COUNT=\"${want}\"/" "${conf}" >| "${conf}.tmp" && mv -f "${conf}.tmp" "${conf}"
+  # Growing writes the count last, which is safe in that direction: a tick
+  # landing mid-grow sees the old smaller count and starts a subset of agents
+  # that all exist. Shrinking has already written it above, and doing so again
+  # here is a harmless no-op that keeps one exit path for both.
+  _rp_write_pool_count "${name}" "${want}"
   _rp_log "pool '${name}': ${have} -> ${want} runner(s)"
   [ "${was_up}" = "1" ] && { _rp_load_pool "${name}" && _rp_up "${name}"; }
   return 0
