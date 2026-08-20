@@ -3,6 +3,10 @@
 # Everything here has a working default, so an empty file is a valid config.
 # This lives outside the repository because it is the only place installation
 # specifics belong; a checkout should carry none of them.
+#
+# Keep it mode 0600. RUNPOOL_WEBHOOK_TOKEN below is a secret, and the default
+# umask would otherwise leave this readable by every user on the machine:
+#   chmod 600 ~/.config/runpool/config
 
 # Where runners, pool definitions, launch agents and state live.
 # Defaults to ~/.local/share/runpool. Registration credentials live here, so
