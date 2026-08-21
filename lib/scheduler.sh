@@ -18,6 +18,32 @@ _rp_gh_runners() {
   [ -n "${out}" ] && echo "${out}" || echo "? ?"
 }
 
+# The one judgement about a pool's registration, as a single token:
+#
+#   unreachable   GitHub could not be asked, so nothing here is a pool fault
+#   unregistered  GitHub has no runners at all — jobs queue forever
+#   offline       runners are up locally and none has reached GitHub
+#   miscount      GitHub's count differs from what the pool expects
+#   ok
+#
+# `status` renders this as a note in a table and `doctor` as a check with a
+# remedy attached. They are two presentations of one decision, and a second
+# copy of the decision is a second thing to keep in step with how GitHub
+# actually behaves — which is the part that took three weeks to learn once.
+#
+# The order is load-bearing: '?' has to be tested before anything treats these
+# as numbers, and 'unregistered' before 'miscount', which would otherwise
+# swallow it.
+#   $1 registered  $2 online  $3 running locally  $4 expected count
+_rp_gh_state() {
+  if   [ "$1" = "?" ];                       then echo unreachable
+  elif [ "$1" = "0" ];                       then echo unregistered
+  elif [ "$3" -gt 0 ] && [ "$2" = "0" ];     then echo offline
+  elif [ "$1" != "$4" ];                     then echo miscount
+  else                                            echo ok
+  fi
+}
+
 # How many of a pool's agents are loaded.
 _rp_running_in() {
   local pool="$1" count="$2" i=1 running=0
@@ -53,15 +79,12 @@ _rp_status() {
     total_running=$(( total_running + running )); total_busy=$(( total_busy + busy ))
 
     note=""
-    if [ "${reg}" = "?" ]; then
-      note="  (github unreachable)"
-    elif [ "${reg}" = "0" ]; then
-      note="  ** NOT REGISTERED — jobs will queue forever **"; warn=1
-    elif [ "${running}" -gt 0 ] && [ "${online}" = "0" ]; then
-      note="  ** started but not connecting to github **"; warn=1
-    elif [ "${reg}" != "${POOL_COUNT}" ]; then
-      note="  (github has ${reg}, pool expects ${POOL_COUNT})"
-    fi
+    case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}")" in
+      unreachable)  note="  (github unreachable)" ;;
+      unregistered) note="  ** NOT REGISTERED — jobs will queue forever **"; warn=1 ;;
+      offline)      note="  ** started but not connecting to github **"; warn=1 ;;
+      miscount)     note="  (github has ${reg}, pool expects ${POOL_COUNT})" ;;
+    esac
 
     printf "  %-10s %-4s %-20s  running %s/%s  busy %s  github %s/%s%s\n" \
       "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${running}" "${POOL_COUNT}" \
@@ -136,6 +159,284 @@ _rp_pools() {
     printf "  %-10s %-4s %-20s count=%s\n" "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}"
   done
   [ "${found}" = "0" ] && echo "  (no pools registered — 'runpool register <pool> --repo OWNER/REPO')"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# doctor — "why is nothing picking this up", in one command
+# ---------------------------------------------------------------------------
+# Every check here is answerable today from `status`, the log, and a launchctl
+# invocation nobody thinks to run. The value is having them in one place with a
+# remedy attached, and one of them is answerable from nothing at all: if the
+# tick agent is not loaded, no pool autoscales, every job waits for a manual
+# `runpool up`, and `status` reports every pool as perfectly healthy — because
+# locally they are.
+#
+# STRICTLY READ-ONLY, and that is a boundary rather than a preference. A
+# diagnostic that repairs is one nobody can run safely while confused, and each
+# repair already exists as its own command. This file reports; lib/lifecycle.sh
+# changes things. The moment this prunes a disk or re-registers a pool it
+# belongs over there instead.
+#
+# Findings accumulate in two file-scope counters rather than being returned,
+# because a function has one integer exit status and these have to survive a
+# loop over the pools.
+_rp_doctor_fails=0
+_rp_doctor_warns=0
+
+# Four markers, all four characters wide so the messages line up:
+#   ok    nothing to do
+#   note  context, or a check that could not be run — not a judgement
+#   warn  worth knowing, does not fail the command
+#   FAIL  something is actually wrong, and the exit status says so
+# $1 headline, $2 optional remedy on a continuation line.
+_rp_doctor_ok()   { printf '  ok    %s\n' "$1"; }
+_rp_doctor_note() { printf '  note  %s\n' "$1"; }
+_rp_doctor_warn() {
+  _rp_doctor_warns=$(( _rp_doctor_warns + 1 ))
+  printf '  warn  %s\n' "$1"
+  [ -n "${2:-}" ] && printf '        %s\n' "$2"
+  return 0   # the test above is the last command, and an absent remedy is fine
+}
+_rp_doctor_fail() {
+  _rp_doctor_fails=$(( _rp_doctor_fails + 1 ))
+  printf '  FAIL  %s\n' "$1"
+  [ -n "${2:-}" ] && printf '        %s\n' "$2"
+  return 0
+}
+
+_rp_doctor() {
+  [ $# -eq 0 ] || { _rp_err "doctor takes no arguments (usage: runpool doctor)"; return 1; }
+
+  local gh_ok=1 pools=0 seen_orgs="" p running gh reg online
+  local tick clean i missing avail_kb free mode other
+
+  _rp_doctor_fails=0
+  _rp_doctor_warns=0
+
+  echo "runpool doctor"
+
+  # --- the global kill switch --------------------------------------------
+  echo ""
+  echo "global"
+  if _rp_paused; then
+    _rp_doctor_fail "runpool is paused: every pool is down and autoscale is off" \
+                    "fix: runpool resume"
+  else
+    _rp_doctor_ok "not paused"
+  fi
+
+  # --- gh ----------------------------------------------------------------
+  # _rp_require tests for the binary and stops there, which is the whole gap:
+  # an expired token fails every API call and each caller then degrades to its
+  # own quiet fallback. _rp_gh_runners echoes '? ?' and reports as unreachable;
+  # _rp_autoscale reads a queued count of zero and never brings anything up.
+  #
+  # command -v rather than _rp_require, because that writes to stderr and this
+  # report is a structured thing on stdout.
+  echo ""
+  echo "github cli"
+  if ! command -v gh >/dev/null 2>&1; then
+    gh_ok=0
+    _rp_doctor_fail "gh is not installed, and every GitHub call runpool makes goes through it" \
+                    "fix: brew install gh, then gh auth login"
+  elif ! gh auth status >/dev/null 2>&1; then
+    gh_ok=0
+    _rp_doctor_fail "gh is installed but not authenticated, so nothing can register, poll or report" \
+                    "fix: gh auth login   (checks below that ask GitHub are skipped)"
+  else
+    _rp_doctor_ok "gh is installed and authenticated"
+  fi
+
+  # --- the scheduler agents ----------------------------------------------
+  # The highest-value check here, and the only one nothing else performs.
+  # `schedule install` writes these two once and nothing ever looks at them
+  # again.
+  echo ""
+  echo "scheduler"
+  tick="${RUNPOOL_LABEL_NS}.tick"
+  clean="${RUNPOOL_LABEL_NS}.clean"
+  if _rp_agent_loaded "${tick}"; then
+    _rp_doctor_ok "the tick agent is loaded: autoscale, idle standdown, contention and health"
+  elif [ -f "${HOME}/Library/LaunchAgents/${tick}.plist" ]; then
+    _rp_doctor_fail "the tick agent is installed but not loaded, so nothing autoscales: a queued job waits for a manual 'runpool up' and every pool still reports as healthy" \
+                    "fix: runpool schedule install   (rewrites and reloads it)"
+  else
+    _rp_doctor_fail "the tick agent is not installed, so nothing autoscales: a queued job waits for a manual 'runpool up' and every pool still reports as healthy" \
+                    "fix: runpool schedule install"
+  fi
+  if _rp_agent_loaded "${clean}"; then
+    _rp_doctor_ok "the clean agent is loaded: daily prune at 04:00"
+  else
+    _rp_doctor_warn "the clean agent is not loaded, so work directories, diagnostics and superseded runner binaries accrue with nothing collecting them" \
+                    "fix: runpool schedule install, or 'runpool clean' by hand"
+  fi
+
+  # --- pools --------------------------------------------------------------
+  echo ""
+  echo "pools"
+  for p in $(_rp_pool_names); do
+    # Counted before the load, and a failed load reported rather than skipped.
+    # Everything else in the tool passes over an unreadable config with one
+    # line on stderr, so a pool that exists and cannot be read looks, from
+    # every table, exactly like a pool that was never registered.
+    pools=$(( pools + 1 ))
+    if ! _rp_load_pool "${p}" 2>/dev/null; then
+      _rp_doctor_fail "${p}: $(_rp_pool_conf "${p}") cannot be read, or is missing one of POOL_SCOPE, POOL_TARGET, POOL_COUNT and POOL_DIR — every other command skips this pool silently" \
+                      "fix: repair the file, or delete it and register the pool again"
+      continue
+    fi
+    running="$(_rp_running_in "${p}" "${POOL_COUNT}")"
+
+    # A pool is meant to sit down, so 'not loaded' says nothing and is not
+    # reported. A MISSING plist is different: _rp_up refuses on the first one
+    # it cannot find, and that refusal is the first anybody hears of it.
+    missing=0
+    i=1
+    while [ "${i}" -le "${POOL_COUNT}" ]; do
+      [ -f "${RUNPOOL_AGENT_DIR}/$(_rp_label "${p}" "${i}").plist" ] || missing=$(( missing + 1 ))
+      i=$(( i + 1 ))
+    done
+    [ "${missing}" -gt 0 ] && _rp_doctor_fail \
+      "${p}: ${missing} of ${POOL_COUNT} launch agent(s) missing, so 'runpool up ${p}' will refuse" \
+      "fix: runpool rewrite-agents"
+
+    # An org pool with an empty watch list never autoscales. GitHub reports
+    # queued runs per repository and not per organisation, so _rp_autoscale has
+    # nothing to poll and the pool waits for a manual 'runpool up' forever —
+    # while looking entirely healthy everywhere else, which is exactly the
+    # failure this command exists for. Local, free, and no API call.
+    [ "${POOL_SCOPE}" = "org" ] && [ -z "${POOL_WATCH:-}" ] && _rp_doctor_fail \
+      "${p}: an org pool with no watched repositories never autoscales, because github reports queued runs per repository rather than per organisation" \
+      "fix: give it --watch OWNER/REPO,... in ~/.config/runpool/pools and 'runpool apply'"
+
+    if [ "${gh_ok}" = "0" ]; then
+      _rp_doctor_note "${p}: ${POOL_SCOPE} ${POOL_TARGET}, ${running}/${POOL_COUNT} running locally (github not checked)"
+      continue
+    fi
+    gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
+    case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}")" in
+      unreachable)
+        _rp_doctor_note "${p}: github could not be reached, so only local state is known: ${running}/${POOL_COUNT} running" ;;
+      unregistered)
+        _rp_doctor_fail "${p}: github has no runners registered for ${POOL_TARGET}, so every job routed here queues forever" \
+                        "fix: runpool reregister ${p}   (github prunes registrations after a long idle spell)" ;;
+      offline)
+        _rp_doctor_fail "${p}: ${running} runner(s) started locally and none has reached github" \
+                        "fix: runpool reregister ${p}" ;;
+      miscount)
+        # A note and not a warning. _rp_gh_runners counts every runner at the
+        # scope, and an organisation's scope covers other pools and other
+        # machines, so a count above POOL_COUNT is entirely normal there.
+        _rp_doctor_note "${p}: github has ${reg} runner(s) at ${POOL_SCOPE} ${POOL_TARGET}, the pool expects ${POOL_COUNT} (an org scope also counts other pools and other machines)" ;;
+      *)
+        _rp_doctor_ok "${p}: ${POOL_SCOPE} ${POOL_TARGET}, github has ${reg}, ${running}/${POOL_COUNT} running locally" ;;
+    esac
+  done
+  [ "${pools}" = "0" ] && _rp_doctor_fail \
+    "no pools are registered, so there is nothing to pick a job up" \
+    "fix: runpool register <pool> --repo OWNER/REPO   (or --org ORG)"
+
+  # --- disk ---------------------------------------------------------------
+  # Against RUNPOOL_BASE and not '/'. The base can sit on a secondary or
+  # external volume, and the only free space that matters is the one the
+  # runners actually write into.
+  echo ""
+  echo "disk"
+  avail_kb=$(df -k "${RUNPOOL_BASE}" 2>/dev/null | awk 'NR == 2 {print $4}')
+  case "${avail_kb}" in
+    ''|*[!0-9]*)
+      _rp_doctor_note "could not read the free space on ${RUNPOOL_BASE}" ;;
+    *)
+      # Reported in MB below a gigabyte. Whole-GB division renders the most
+      # alarming case in the range, a nearly full volume, as a flat '0GB'.
+      if [ "${avail_kb}" -lt 1048576 ]; then
+        free="$(( avail_kb / 1024 ))MB"
+      else
+        free="$(( avail_kb / 1048576 ))GB"
+      fi
+      # Persistent runners never clean up after themselves and the numbers are
+      # large: a self-update strands roughly 580MB of superseded binaries per
+      # runner and diagnostics reach roughly 150MB per runner, so a pool of
+      # four turns over several GB between cleans. Pointed at `clean`, never
+      # pruned here: see the read-only note above.
+      if [ "${avail_kb}" -lt 5242880 ]; then
+        _rp_doctor_fail "${free} free on ${RUNPOOL_BASE}: a job that fills the disk fails in ways that look like a defect in the code" \
+                        "fix: runpool clean"
+      elif [ "${avail_kb}" -lt 20971520 ]; then
+        _rp_doctor_warn "${free} free on ${RUNPOOL_BASE}" \
+                        "fix: runpool clean prunes work dirs, temp, diagnostics, superseded binaries and package stores"
+      else
+        _rp_doctor_ok "${free} free on ${RUNPOOL_BASE}"
+      fi ;;
+  esac
+
+  # --- security -----------------------------------------------------------
+  echo ""
+  echo "security"
+  # The config, and deliberately NOT the pools file. install.sh chmods the
+  # config 600 because that is where a notifier's endpoint and token go, and
+  # omits the chmod on the pools file on purpose: it holds no credentials,
+  # which is the whole reason it is safe to copy between machines.
+  #
+  # Only a regular file is checked. RUNPOOL_CONFIG=/dev/null is the documented
+  # way to isolate an invocation and is mode 666 by definition, so testing it
+  # would fail every isolated run for no reason.
+  if [ ! -e "${RUNPOOL_CONFIG}" ]; then
+    _rp_doctor_note "no config at ${RUNPOOL_CONFIG}, so every setting is at its default"
+  elif [ ! -f "${RUNPOOL_CONFIG}" ]; then
+    _rp_doctor_note "${RUNPOOL_CONFIG} is not a regular file, so its permissions are not checked"
+  else
+    mode=$(stat -f '%Lp' "${RUNPOOL_CONFIG}" 2>/dev/null)
+    case "${mode}" in
+      ''|*[!0-7]*)
+        _rp_doctor_note "could not read the mode of ${RUNPOOL_CONFIG}" ;;
+      *)
+        other=$(( 8#${mode} & 8#077 ))
+        if [ "${other}" -ne 0 ]; then
+          _rp_doctor_fail "${RUNPOOL_CONFIG} is mode ${mode}, so other users on this machine can read it, and it is where a notifier's endpoint and token live" \
+                          "fix: chmod 600 ${RUNPOOL_CONFIG}"
+        else
+          _rp_doctor_ok "${RUNPOOL_CONFIG} is mode ${mode}, owner only"
+        fi ;;
+    esac
+  fi
+
+  # The organisation runner-group setting. `register` consults it once, when a
+  # pool is created; it can be switched on the day after and nothing would ever
+  # mention it again. Reported and never re-derived — enumerating an
+  # organisation's public repositories to work out the same answer is
+  # explicitly not RunPool's job. See SECURITY.md.
+  if [ "${gh_ok}" = "1" ]; then
+    for p in $(_rp_pool_names); do
+      _rp_load_pool "${p}" || continue
+      [ "${POOL_SCOPE}" = "org" ] || continue
+      # Several pools can share one organisation; ask about each one once.
+      case " ${seen_orgs} " in *" ${POOL_TARGET} "*) continue ;; esac
+      seen_orgs="${seen_orgs} ${POOL_TARGET}"
+      case "$(_rp_org_allows_public "${POOL_TARGET}")" in
+        true)
+          _rp_doctor_warn "${POOL_TARGET}: the default runner group has allows_public_repositories=true, so a public repository in that organisation can run on these runners" \
+                          "fix: turn it off in the organisation's Actions runner-group settings, unless it is deliberate" ;;
+        false)
+          _rp_doctor_ok "${POOL_TARGET}: allows_public_repositories=false on the default runner group" ;;
+        *)
+          _rp_doctor_note "${POOL_TARGET}: could not read the runner groups (needs admin:org) — check allows_public_repositories in the organisation's Actions settings" ;;
+      esac
+    done
+  fi
+
+  echo ""
+  if [ "${_rp_doctor_fails}" -gt 0 ]; then
+    printf '%s problem(s) and %s warning(s). Nothing above was changed.\n' \
+      "${_rp_doctor_fails}" "${_rp_doctor_warns}"
+    return 1
+  fi
+  if [ "${_rp_doctor_warns}" -gt 0 ]; then
+    printf 'No problems, %s warning(s). Nothing above was changed.\n' "${_rp_doctor_warns}"
+    return 0
+  fi
+  echo "Everything checks out. Nothing above was changed."
   return 0
 }
 

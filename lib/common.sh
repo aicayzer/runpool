@@ -261,6 +261,34 @@ _rp_scope_path() {
   if [ "$1" = "org" ]; then echo "/orgs/$2"; else echo "/repos/$2"; fi
 }
 
+# Whether organisation $1's DEFAULT runner group lets public repositories use
+# its runners. Echoes 'true', 'false' or 'unknown'.
+#
+# 'unknown' is a third answer and not a synonym for 'false': reading runner
+# groups needs admin:org, and a caller that folded the two together would
+# report a permission problem as an all-clear.
+#
+# GitHub owns this control at organisation scope. The setting defaults to false
+# and runners land in the default group because config.sh is never passed
+# --runnergroup, so RunPool reads it and reports it and does nothing else. In
+# particular it does NOT enumerate the organisation's public repositories to
+# re-derive the same answer; SECURITY.md and AGENTS.md both state why the
+# repository and organisation cases are deliberately asymmetric.
+#
+# Shared rather than inline because it now has two callers that must agree:
+# `register` reads it once when a pool is created, and `doctor` reads it on
+# every run — the setting can be switched on long after the pool exists.
+_rp_org_allows_public() {
+  local pub
+  pub=$(gh api "/orgs/$1/actions/runner-groups" \
+          --jq '[.runner_groups[] | select(.default == true) | .allows_public_repositories][0]' 2>/dev/null)
+  case "${pub}" in
+    true)  echo true ;;
+    false) echo false ;;
+    *)     echo unknown ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Runner binary
 # ---------------------------------------------------------------------------

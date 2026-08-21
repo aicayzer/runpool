@@ -58,6 +58,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | `apply [--dry-run] [--file PATH]` | Reconcile the machine to a file describing its pools |
 | `up` / `down <pool>` | Bring a pool online, or stand it down |
 | `status [--json]` | Local state alongside what GitHub actually sees |
+| `doctor` | Why is nothing picking this up. Reports; changes nothing |
 | `pools` | List registered pools |
 | `reregister <pool>` | Recreate GitHub registrations, keeping the local install |
 | `remove <pool>` | Deregister and delete a pool |
@@ -67,6 +68,8 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | `schedule install\|remove` | The background agents that drive everything above |
 
 **`status --json --local` skips the GitHub query**, reporting those fields as `null`. Anything refreshing on a timer should use it: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
+
+**`doctor` answers "why is nothing picking this up" in one command.** It checks `gh` and its authentication, that GitHub still has the registrations, that the launch agents exist — including the tick agent, which nothing else looks at and without which no pool autoscales at all — and then disk headroom, config permissions and the organisation's runner-group setting. Each failure comes with what to do about it, and it exits non-zero when something is actually wrong. It reports and repairs nothing, so it is safe to run at any moment, including mid-job.
 
 `skills/runpool/` is an agent skill for *using* RunPool: wiring a repository to local CI, choosing a scope, and diagnosing a job that queues and never starts.
 

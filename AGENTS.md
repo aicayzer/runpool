@@ -27,7 +27,7 @@ bin/runpool          the executable and its dispatcher
 lib/common.sh        config, logging, pool loading, launch agents, deregistration
 lib/lifecycle.sh     register, set-count, up, down, reregister, remove
 lib/apply.sh         the pools file, and reconciling the machine to it
-lib/scheduler.sh     status, autoscale, sweep, clean, schedule
+lib/scheduler.sh     status, doctor, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
 lib/stats.sh         job durations from recorded telemetry
 contrib/             optional pieces the user opts into: job hook, webhook notifier,
