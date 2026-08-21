@@ -185,16 +185,16 @@ _rp_doctor_fails=0
 _rp_doctor_warns=0
 
 # Four markers, all four characters wide so the messages line up:
-#   ok    nothing to do
-#   note  context, or a check that could not be run — not a judgement
-#   warn  worth knowing, does not fail the command
+#   OK    nothing to do
+#   INFO  context, or a check that could not be run — not a judgement
+#   WARN  worth knowing, does not fail the command
 #   FAIL  something is actually wrong, and the exit status says so
 # $1 headline, $2 optional remedy on a continuation line.
-_rp_doctor_ok()   { printf '  ok    %s\n' "$1"; }
-_rp_doctor_note() { printf '  note  %s\n' "$1"; }
+_rp_doctor_ok()   { printf '  OK    %s\n' "$1"; }
+_rp_doctor_note() { printf '  INFO  %s\n' "$1"; }
 _rp_doctor_warn() {
   _rp_doctor_warns=$(( _rp_doctor_warns + 1 ))
-  printf '  warn  %s\n' "$1"
+  printf '  WARN  %s\n' "$1"
   [ -n "${2:-}" ] && printf '        %s\n' "$2"
   return 0   # the test above is the last command, and an absent remedy is fine
 }
