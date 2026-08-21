@@ -22,7 +22,7 @@ _rp_register() {
     return 1
   }
 
-  local scope="" target="" count="2" watch="" clean="" tok allow_public=0 vis="" pub=""
+  local scope="" target="" count="2" watch="" clean="" tok allow_public=0 vis=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo|--org|--count|--watch)
@@ -121,9 +121,11 @@ _rp_register() {
     #
     # A warning rather than a refusal, and no failing closed, precisely because
     # this is not RunPool's control to enforce.
-    pub=$(gh api "/orgs/${target}/actions/runner-groups" \
-            --jq '[.runner_groups[] | select(.default == true) | .allows_public_repositories][0]' 2>/dev/null)
-    case "${pub}" in
+    #
+    # The read itself lives in lib/common.sh, because `doctor` reports the same
+    # setting and this one is consulted only at create: it can be switched on
+    # the day after and nothing here would ever mention it again.
+    case "$(_rp_org_allows_public "${target}")" in
       true)
         _rp_log "WARNING: the default runner group on ${target} has allows_public_repositories=true, so public repositories in that organisation can use these runners. Turn it off in the organisation's Actions runner-group settings unless that is deliberate."
         ;;

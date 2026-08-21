@@ -19,6 +19,7 @@ On-demand self-hosted GitHub Actions runner pools for macOS. Pools wake when job
 ```bash
 command -v runpool || echo "not installed"
 runpool status
+runpool doctor    # if anything looks wrong, or a job is queued and waiting
 ```
 
 Not installed:
@@ -118,20 +119,32 @@ Keep publish, deploy and OIDC jobs on hosted runners too: npm provenance require
 
 ## Diagnosing "the job is queued and nothing happens"
 
-Work down this list.
+**Start here, before `status` and before the log.**
 
 ```bash
-runpool status
+runpool doctor
 ```
 
-- **`** NOT REGISTERED **`** — GitHub has pruned the registrations after a long idle spell. The local install is untouched and looks perfectly healthy, which is what makes this confusing. Fix: `runpool reregister <pool>`.
-- **`running N/N` but `github 0/N`** — the runners started but are not reaching GitHub. Same fix.
-- **`GLOBAL: paused`** — someone hit the kill switch. `runpool resume`.
-- **`running 0/N` and the job is genuinely queued** — the tick brings a pool up within about a minute. Wait one minute before intervening. `runpool up <pool>` forces it.
-- **`running 0/N` on an *org* pool that never comes up on its own** — check the pool's `watch` array in `status --json`. If it is empty, autoscale has nothing to poll, because GitHub reports queued runs per repository rather than per organisation. Add the repository to the pool's line in `~/.config/runpool/pools` and `runpool apply`, or `runpool register` it with `--watch` in the first place.
-- **Everything looks right but the job still waits** — check routing rather than capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's.
+It works down the whole list below in one pass, prints a remedy against each failure, and **exits non-zero when something is actually wrong**. It reports and repairs nothing, so it is safe at any moment including mid-job — and so nothing it finds is fixed until you run the command it names.
+
+What it finds, and what each finding means:
+
+- **the tick agent is not loaded** — nothing autoscales, so every job waits for a manual `runpool up` while every pool still reports as perfectly healthy. **This is the one failure no other command surfaces.** Fix: `runpool schedule install`.
+- **`gh` is not authenticated** — every API call fails and each caller degrades quietly rather than complaining: `status` reports GitHub as unreachable, and autoscale reads a queued count of zero and never wakes anything. Fix: `gh auth login`.
+- **github has no runners registered** — GitHub prunes registrations after a long idle spell. The local install is untouched and looks entirely healthy, which is what makes this confusing. Fix: `runpool reregister <pool>`.
+- **started locally and none has reached github** — the runners are up and not connecting. Same fix.
+- **runpool is paused** — someone hit the kill switch. Fix: `runpool resume`.
+- **launch agents missing** — `runpool up` refuses on the first plist it cannot find. Fix: `runpool rewrite-agents`.
+- **an org pool with no watched repositories** — it never autoscales, because GitHub reports queued runs per repository rather than per organisation. Fix: give it `--watch` and `runpool apply`. See *`--watch` is org-only and matters* above.
+- **disk, config permissions, the organisation's runner-group setting** — each with its own remedy. None of these stops a job being picked up, but they are the things nothing else ever looks at.
+
+**Two situations `doctor` deliberately reports as healthy, because they are.**
+
+- **`running 0/N` with a job genuinely queued** — the tick brings a pool up within about a minute. Wait a minute before intervening; `runpool up <pool>` forces it.
+- **A clean report and the job still waits** — the problem is routing, not capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's. RunPool controls only whether the runners are up and cannot see either.
 
 ```bash
+runpool status                  # the same picture as a table, one row per pool
 runpool status --json           # machine-readable, for scripting
 runpool status --json --local   # same shape, no GitHub call; use this on a timer
 tail -50 ~/Library/Logs/runpool/runpool.log
@@ -155,11 +168,23 @@ Resizing refuses while a job is running. Wait rather than forcing.
 
 Telemetry plus GitHub can answer this properly. `runpool stats` deliberately will not: it describes what jobs cost and stops there, because every analysis baked into the tool is a blind spot with a version number.
 
+**Start with queue time, because it is the only figure that moves when capacity changes.** Duration says what a job costs and load says how contended the machine was; neither responds to another runner.
+
+```bash
+runpool stats --queue
+```
+
+Median and p90 of the wait before each job started, per `workflow / job`. It is behind a flag and not part of plain `stats` because it joins the local records to GitHub — one API call per run — and `stats` otherwise reads nothing but local files.
+
+**Never quote the number without the qualifier it prints.** A queue time conflates three different situations and only one of them is a shortage of runners; the trap is spelled out below and the command repeats it every time for that reason. On an on-demand pool the first job after a quiet spell always shows about a minute of queue while the pool wakes, and no amount of capacity removes it.
+
+**Then go to the raw rows to separate them:**
+
 ```bash
 contrib/telemetry-join.sh > joined.tsv
 ```
 
-One row per job: duration, queue time, load at start, concurrency, and the raw created and started timestamps. Analyse that, do not trust a canned summary.
+One row per job: duration, queue time, load at start, concurrency, and the raw created and started timestamps. Analyse that, do not trust a canned summary — `--queue` included.
 
 **Four traps, each of which has produced a confidently wrong answer here.**
 
