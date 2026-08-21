@@ -173,19 +173,63 @@ _rp_valid_gh_repo() {
   esac
 }
 
-# Load POOL_* for pool $1 into the caller's scope. POOL_WATCH is optional and
-# only set on org pools, so every reader must use "${POOL_WATCH:-}".
+# A runner count. Every caller used to test only '' and non-digits, which let
+# through two values that then failed somewhere else and blamed the wrong
+# thing:
+#
+#   '007' passes a digits-only test, is written to POOL_COUNT verbatim, and
+#   comes back out of _rp_status_json as "count":007 — which Python and Node
+#   both reject, taking any wrapper reading that JSON down with it.
+#
+#   A twenty-digit count also passes, and then `[ "${count}" -ge 1 ]` prints
+#   its own 'integer expression expected' with an internal path in it before
+#   the caller reports some unrelated reason.
+#
+# The upper bound is what keeps `[ -ge ]` off a value libc cannot parse. Four
+# digits is far past anything a single Mac can host, so the bound costs nothing
+# real and the failure it prevents is a raw shell error.
+_rp_valid_count() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;   # empty or not all digits
+    0*)          return 1 ;;   # leading zero, and plain '0' with it
+  esac
+  [ "${#1}" -le 4 ] || return 1
+  return 0
+}
+
+# The one sentence every caller prints when _rp_valid_count says no. Kept here
+# so the pools file and the command line cannot drift into describing the same
+# rule differently.
+_rp_count_rule() { echo "a runner count is a whole number from 1 to 9999, written without a leading zero"; }
+
+# Load POOL_* for pool $1 into the caller's scope. POOL_WATCH is set only on
+# org pools, so every reader still uses "${POOL_WATCH:-}".
+#
+# EVERY POOL_* is cleared first, not just POOL_WATCH. Clearing one of them was
+# enough while nothing loaded more than one pool per process; `apply` reconciles
+# a whole file in one, and a config missing a field then inherited the previous
+# pool's value and got planned against it. A pool silently taking on its
+# neighbour's count, directory or labels is worse than any error.
+#
+# The four fields below are dereferenced without a default all over this tool —
+# POOL_COUNT in arithmetic, POOL_DIR as a path prefix — so a config that
+# survived sourcing but defines none of them is refused here rather than
+# somewhere further on.
+# shellcheck disable=SC2034  # every POOL_* here is read by another lib/ fragment
 _rp_load_pool() {
   local conf; conf="$(_rp_pool_conf "$1")"
   if [ ! -f "${conf}" ]; then
     _rp_err "unknown pool: $1 (see 'runpool pools')"; return 1
   fi
-  # Cleared before sourcing so that `set -u` does not trip on a repo pool,
-  # whose config file has no POOL_WATCH line at all.
-  # shellcheck disable=SC2034  # read by lib/scheduler.sh
-  POOL_WATCH=""
+  POOL_NAME=""; POOL_SCOPE=""; POOL_TARGET=""; POOL_COUNT=""
+  POOL_DIR=""; POOL_LABELS=""; POOL_WATCH=""
   # shellcheck disable=SC1090
-  . "${conf}"
+  . "${conf}" || { _rp_err "pool '$1': could not read ${conf}"; return 1; }
+  if [ -z "${POOL_SCOPE}" ] || [ -z "${POOL_TARGET}" ] || \
+     [ -z "${POOL_COUNT}" ] || [ -z "${POOL_DIR}" ]; then
+    _rp_err "pool '$1': ${conf} is incomplete (needs POOL_SCOPE, POOL_TARGET, POOL_COUNT and POOL_DIR)"
+    return 1
+  fi
 }
 
 # find, not a glob, so an empty pool directory stays silent rather than
