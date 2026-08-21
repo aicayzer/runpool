@@ -70,7 +70,10 @@ runpool — on-demand self-hosted GitHub Actions runner pools for macOS
                            launch agents, disk, permissions. Reports and
                            changes nothing; exits non-zero if something is wrong
   pools                    list registered pools
-  stats                    job durations by concurrency, to size the pool with data
+  stats [--queue]          what recorded jobs cost, to size the pool with data
+                           --queue adds the wait before a runner picked each
+                           job up, joining the records to GitHub: one API call
+                           per run, so it is not part of plain stats
   reregister <pool>        recreate GitHub registrations, keep the local install
   remove <pool>            deregister and delete a pool
 
@@ -103,7 +106,7 @@ case "${cmd}" in
   status)         _rp_status "$@" ;;
   doctor)         _rp_doctor "$@" ;;
   pools)          _rp_pools ;;
-  stats)          _rp_stats ;;
+  stats)          _rp_stats "$@" ;;
   tick)           _rp_tick ;;
   autoscale)      _rp_autoscale ;;
   sweep)          _rp_sweep ;;

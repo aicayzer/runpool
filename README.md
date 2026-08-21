@@ -63,7 +63,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | `reregister <pool>` | Recreate GitHub registrations, keeping the local install |
 | `remove <pool>` | Deregister and delete a pool |
 | `clean [pool]` | Prune work directories, temp, diagnostics, old binaries, caches |
-| `stats` | What jobs actually cost, from recorded telemetry |
+| `stats [--queue]` | What jobs actually cost, from recorded telemetry. `--queue` adds the wait before each job started |
 | `pause` / `resume` | Global kill switch |
 | `schedule install\|remove` | The background agents that drive everything above |
 
@@ -136,7 +136,7 @@ Unset, it reports nothing and works as well. `contrib/notify-webhook.sh` is a re
 - **For an organisation, that control is GitHub's, not RunPool's.** A runner group carries `allows_public_repositories`, it is `false` by default, and runners land in the default group, so public repos in the org do not get them. RunPool reads that setting when you register and warns only if it has been turned on. [SECURITY.md](SECURITY.md) covers the whole picture, including what RunPool deliberately does not do.
 - **A runner can look healthy while GitHub has dropped it.** GitHub prunes registrations that have not connected for a long time. The local install still starts and connects and then picks up nothing, so jobs queue forever against a pool reporting as running. That is what the `github` column in `status` is for, and `reregister` fixes it.
 - **`services:` and `container:` do not force a hosted runner.** Those two workflow keys are Linux-only, but an ordinary `docker run` inside a step works anywhere Docker does, including here.
-- **More runners is not obviously more throughput**, and the contention warning scales with pool size: it defaults to six times core count, while a busy pool of N runners reaches roughly N times core count on its own. `runpool stats` and `contrib/telemetry-join.sh` settle both questions on your machine, using queue time rather than argument.
+- **More runners is not obviously more throughput**, and the contention warning scales with pool size: it defaults to six times core count, while a busy pool of N runners reaches roughly N times core count on its own. `runpool stats` describes what jobs cost and `runpool stats --queue` adds the wait before each one started, which is the figure that moves when capacity changes. Read it with the qualifier it prints: a wait can be a cold pool waking or a dependency that has not finished, and neither is fixed by more runners. `contrib/telemetry-join.sh` gives you the raw rows to separate them.
 
 ## Not on a Mac?
 

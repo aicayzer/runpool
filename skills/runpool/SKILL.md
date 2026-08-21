@@ -168,11 +168,23 @@ Resizing refuses while a job is running. Wait rather than forcing.
 
 Telemetry plus GitHub can answer this properly. `runpool stats` deliberately will not: it describes what jobs cost and stops there, because every analysis baked into the tool is a blind spot with a version number.
 
+**Start with queue time, because it is the only figure that moves when capacity changes.** Duration says what a job costs and load says how contended the machine was; neither responds to another runner.
+
+```bash
+runpool stats --queue
+```
+
+Median and p90 of the wait before each job started, per `workflow / job`. It is behind a flag and not part of plain `stats` because it joins the local records to GitHub — one API call per run — and `stats` otherwise reads nothing but local files.
+
+**Never quote the number without the qualifier it prints.** A queue time conflates three different situations and only one of them is a shortage of runners; the trap is spelled out below and the command repeats it every time for that reason. On an on-demand pool the first job after a quiet spell always shows about a minute of queue while the pool wakes, and no amount of capacity removes it.
+
+**Then go to the raw rows to separate them:**
+
 ```bash
 contrib/telemetry-join.sh > joined.tsv
 ```
 
-One row per job: duration, queue time, load at start, concurrency, and the raw created and started timestamps. Analyse that, do not trust a canned summary.
+One row per job: duration, queue time, load at start, concurrency, and the raw created and started timestamps. Analyse that, do not trust a canned summary — `--queue` included.
 
 **Four traps, each of which has produced a confidently wrong answer here.**
 
