@@ -11,14 +11,26 @@
 # It holds no credentials and nothing machine-specific, so it is safe to keep
 # in a dotfiles repository alongside anything else you carry between machines.
 #
+# Another path can be used instead, either for one run or for good:
+#
+#   runpool apply --file ./pools            one run, this file
+#   RUNPOOL_POOLS_FILE=... runpool apply    one run, from the environment
+#   RUNPOOL_POOLS_FILE in the config file   every run on this machine
+#
 # One pool per line, written exactly as its `register` arguments minus the word
-# `register`. Blank lines and '#' comments are ignored, and a trailing '\'
-# continues onto the next line.
+# `register`:
 #
 #   <name>  --org ORG | --repo OWNER/REPO
 #           [--count N]              runners in the pool; default 2
 #           [--watch OWNER/REPO,...] org pools only, see below
-#           [--allow-public]         only consulted when the pool is created
+#           [--allow-public]         repo pools only, and only consulted when
+#                                    the pool is created
+#
+# Blank lines are ignored. A '#' comments out the line it is on and nothing
+# else. A trailing '\' continues onto the next line, which is what keeps a long
+# --watch list readable — and the line it continues onto has to say something,
+# so a half-uncommented example is an error naming both lines rather than a
+# pool quietly missing half of itself.
 #
 # Reconciliation goes one way. A pool here and not on the machine is created; a
 # count or watch list that differs is changed; a pool on the machine and not
@@ -41,8 +53,14 @@
 # A repo pool needs no --watch. It polls its own target, and giving it one is
 # refused rather than ignored.
 
-# acme  --org acme-inc --count 4 \
-#       --watch acme-inc/api, acme-inc/web, acme-inc/infra
+# acme  --org acme-inc --count 4 --watch acme-inc/api, acme-inc/web
+
+# Long lists are easier to read split across lines. Uncomment every line of it
+# or none of them:
+#
+#   acme  --org acme-inc --count 4 \
+#         --watch acme-inc/api, acme-inc/web \
+#         --watch acme-inc/infra
 
 # ---------------------------------------------------------------------------
 # A personal repository. GitHub has no user-account scope, so a repo outside an
