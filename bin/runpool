@@ -48,9 +48,13 @@ _rp_help() {
   cat <<'HELP'
 runpool — on-demand self-hosted GitHub Actions runner pools for macOS
 
-  register <pool> --repo OWNER/REPO|--org ORG [--count N] [--allow-public]
+  register <pool> --repo OWNER/REPO|--org ORG [--count N]
+                  [--watch OWNER/REPO,...] [--allow-public]
                            create a pool and configure its runners (left stopped)
+                           --watch is org pools only: the repositories polled
+                           for queued work, without which one never autoscales
                            a public repo is refused; --allow-public overrides it
+                           (repo scope only)
   set-count <pool> N       change a pool's runner count after registration
   apply [--dry-run] [--file PATH]
                            reconcile this machine to a file describing its
@@ -78,6 +82,7 @@ controls only whether runners are running.
 
 Configuration: ~/.config/runpool/config  (see runpool.conf.example)
 Pools:         ~/.config/runpool/pools   (see runpool.pools.example)
+               override with RUNPOOL_POOLS_FILE, or per run with --file
 HELP
 }
 

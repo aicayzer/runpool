@@ -53,9 +53,9 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 
 | Command | |
 |---|---|
-| `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--allow-public]` | Create a pool and configure its runners |
+| `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--watch OWNER/REPO,...] [--allow-public]` | Create a pool and configure its runners |
 | `set-count <pool> N` | Change a pool's runner count |
-| `apply [--dry-run]` | Reconcile the machine to a file describing its pools |
+| `apply [--dry-run] [--file PATH]` | Reconcile the machine to a file describing its pools |
 | `up` / `down <pool>` | Bring a pool online, or stand it down |
 | `status [--json]` | Local state alongside what GitHub actually sees |
 | `pools` | List registered pools |
@@ -95,11 +95,17 @@ runpool apply
   ? old          repo me/retired        not in the file — left alone ('runpool remove old' to delete it)
 ```
 
+A real run prints that same plan in full first, then acts on it under an `applying:` heading, so what was decided and what was done stay separate.
+
+**The file is `~/.config/runpool/pools` unless you say otherwise.** `--file PATH` overrides it for one run and `RUNPOOL_POOLS_FILE` overrides it for good, the same precedence as every other setting: environment, then config file, then the default.
+
+**A `#` comments out the line it is on and nothing else**, and a trailing `\` continues onto the next line — which then has to say something. Uncomment a multi-line pool entirely or not at all; half of one is an error naming both lines, not a pool quietly missing the other half.
+
 **Reconciliation goes one way.** A pool in the file and not on the machine is created, a count or watch list that differs is changed, and **a pool on the machine and not in the file is reported and left alone**. Deleting a pool deregisters its runners with GitHub, and a missing line is far too quiet a way to ask for that, so `remove` stays explicit. Changing a pool's scope or target is reported as a conflict rather than applied, because the runners are registered against the old one.
 
 The file holds no credentials and nothing machine-specific, so **a second machine gets the same pools by getting the same file.** That is the point of it: `register` does not become wrong, it just stops being the thing you copy.
 
-**`--watch` matters for organisation pools.** GitHub reports queued runs per repository and not per organisation, so an org pool with nothing watched never wakes on its own. It is the one setting `register` cannot express ([#19](https://github.com/aicayzer/runpool/issues/19)).
+**`--watch` matters for organisation pools.** GitHub reports queued runs per repository and not per organisation, so an org pool with nothing watched never wakes on its own. `register` takes it too, so a single pool created by hand is no worse off than one from the file; on a repo pool both refuse it, because such a pool already polls its own target.
 
 ## Raycast extension
 

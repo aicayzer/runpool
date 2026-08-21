@@ -37,10 +37,13 @@ Two changes, one in each place.
 
 ```bash
 runpool pools                                        # is there one already?
-runpool register <name> --org ORG --count 4          # org-wide
+runpool register <name> --org ORG --count 4 \
+        --watch OWNER/REPO,OWNER/OTHER               # org-wide
 runpool register <name> --repo OWNER/REPO --count 2  # a single repo
 runpool schedule install                             # once per machine
 ```
+
+**An org pool needs `--watch` or it never autoscales.** See *`--watch` is org-only and matters* below. A repo pool polls its own target and refuses the flag.
 
 **Adding several pools, or setting up a second machine?** Describe them in a file and reconcile to it instead — see *Declaring a machine's pools* below.
 
@@ -65,6 +68,10 @@ acme  --org acme-inc --count 4 \
 side  --repo me/side-project --count 1
 ```
 
+**Another path**, in order of precedence: `runpool apply --file PATH` for one run, `RUNPOOL_POOLS_FILE` in the environment, `RUNPOOL_POOLS_FILE` in `~/.config/runpool/config`. Use `--file` when reading or checking a file that is not the machine's own.
+
+**A `#` comments out the line it is on and nothing else.** A trailing `\` continues onto the next line, and that line has to say something — so a pool commented out across several lines is uncommented entirely or not at all.
+
 ```bash
 runpool apply --dry-run    # always this first
 runpool apply
@@ -76,12 +83,15 @@ Read the plan by its first character: `+` create, `~` change, `=` unchanged, `?`
 
 - **`apply` never deletes.** A pool that is on the machine and not in the file is reported and left alone. If the user wants it gone, that is `runpool remove <pool>`, explicitly.
 - **`!` means the scope or target differs** from what the runners are registered against. `apply` will not fix that; remove the pool and apply again. Say so rather than working around it.
-- **`apply` exits non-zero on a conflict or a parse error**, and names the offending line by number.
+- **`apply` exits non-zero on a conflict or a parse error**, and names the offending line by number. It also refuses a pools file it cannot read, rather than reading it as empty and reporting every real pool as `?`.
+- **A real run prints the whole plan first**, then acts under an `applying:` heading. Read the plan, not the interleaving.
 - **A public repository is still refused**, by `register`, at the moment the pool is actually created. A dry run does not reach that check, so a `+` line is not a promise the create will succeed.
 
 **Prefer this over a sequence of `register` commands whenever there is more than one pool, or more than one machine.** The file is the thing you copy; a remembered sequence of commands is not. `register` is still right for adding a single pool to a machine that has no such file.
 
-**`--watch` is org-only and matters.** GitHub reports queued runs per repository, not per organisation, so an org pool with nothing watched never autoscales and every job waits for a manual `runpool up`. `register` cannot set it at all ([#19](https://github.com/aicayzer/runpool/issues/19)), which is a reason to reach for `apply` for org pools specifically. On a repo pool it is refused, because the pool already polls its own target.
+**`--watch` is org-only and matters.** GitHub reports queued runs per repository, not per organisation, so an org pool with nothing watched never autoscales and every job waits for a manual `runpool up`. Both `register` and the pools file take it, repeated flags accumulate, and both refuse it on a repo pool, because such a pool already polls its own target.
+
+**`--allow-public` is repo-only**, for the mirror-image reason: at organisation scope the control is GitHub's own `allows_public_repositories` on the runner group, so the flag would do nothing. Both routes refuse it there rather than accepting it silently. It is consulted only when a pool is created, so adding or removing it on an existing pool is not drift and `apply` correctly reports `=`.
 
 ## Which scope
 
@@ -118,7 +128,7 @@ runpool status
 - **`running N/N` but `github 0/N`** — the runners started but are not reaching GitHub. Same fix.
 - **`GLOBAL: paused`** — someone hit the kill switch. `runpool resume`.
 - **`running 0/N` and the job is genuinely queued** — the tick brings a pool up within about a minute. Wait one minute before intervening. `runpool up <pool>` forces it.
-- **`running 0/N` on an *org* pool that never comes up on its own** — check the pool's `watch` array in `status --json`. If it is empty, autoscale has nothing to poll, because GitHub reports queued runs per repository rather than per organisation. Add the repository to the pool's line in `~/.config/runpool/pools` and `runpool apply`.
+- **`running 0/N` on an *org* pool that never comes up on its own** — check the pool's `watch` array in `status --json`. If it is empty, autoscale has nothing to poll, because GitHub reports queued runs per repository rather than per organisation. Add the repository to the pool's line in `~/.config/runpool/pools` and `runpool apply`, or `runpool register` it with `--watch` in the first place.
 - **Everything looks right but the job still waits** — check routing rather than capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's.
 
 ```bash

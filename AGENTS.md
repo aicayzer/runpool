@@ -38,7 +38,7 @@ assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 
 **`skills/runpool/SKILL.md` and this file have different audiences and must not converge.** This file is for changing runpool. The skill is for an agent wiring some other repository to it, choosing a scope, or working out why a job is queued and nothing has picked it up. If a change alters observable behaviour, the skill needs updating; if it alters how the code is structured, this file does.
 
-**The three-way split is load-bearing**, not cosmetic. It is what lets the notifier be absent. Keep new code in the part that owns the concern; if something does not fit, that is a signal the concern is new, not that the split is wrong.
+**The split by concern is load-bearing**, not cosmetic. It is what lets the notifier be absent, and what keeps the pools file out of everything that does not read one. Keep new code in the part that owns the concern; if something does not fit, that is a signal the concern is new, not that the split is wrong.
 
 ## The icon
 
@@ -67,7 +67,7 @@ The background is transparent and there are no baked-in rounded corners, so the 
 
 Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **A new setting has to be added in four places in that block** — the snapshot, the restore, the `unset`, and the `export` — or it silently becomes un-overridable, or leaks a `_rp_env_*` variable, or fails to reach a child process.
 
-`RUNPOOL_POOLS_FILE` is deliberately derived from `XDG_CONFIG_HOME` rather than from `RUNPOOL_CONFIG`'s directory, so that pointing the config at `/dev/null` to isolate a test does not also move the pools file somewhere unexpected.
+`RUNPOOL_POOLS_FILE` is deliberately derived from `XDG_CONFIG_HOME` rather than from `RUNPOOL_CONFIG`'s directory, so that pointing the config at `/dev/null` to isolate a test does not also move the pools file somewhere unexpected. **The corollary is that neither `RUNPOOL_CONFIG` nor `RUNPOOL_BASE` isolates it** — it has to be set on its own, or overridden per run with `apply --file`. `/dev/null` is a valid value: `apply` tests for a readable non-directory rather than a regular file, so the isolation idiom means the same thing for both settings.
 
 ## Working on it
 
@@ -88,9 +88,11 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
 RUNPOOL_BASE=/tmp/rp-test RUNPOOL_CONFIG=/dev/null ./bin/runpool status --json
 ```
 
+**`RUNPOOL_BASE` does not move the pools file**, by the design noted under *Configuration precedence* above. Anything touching `apply` needs `RUNPOOL_POOLS_FILE` or `--file` as well, or it reads the real one and plans against real GitHub targets. `RUNPOOL_LOG_DIR` too, or the log lands in a real installation's.
+
 **Anything that registers, resizes or removes a pool talks to the real GitHub API and to real runners.** `register`, `set-count`, `reregister` and `remove` have no dry-run and there is nowhere sensible to add one, because the work *is* the API call. Verify destructive changes against a throwaway private repository, and never while a job is in flight — the tool refuses on purpose, and forcing past that kills live jobs.
 
-**`apply --dry-run` is the one exception, and only for the plan.** It reads the pools file and the pool configs, prints what it would do, and calls nothing. That makes the whole of `lib/apply.sh` testable with hand-made pool configs under a scratch `RUNPOOL_BASE` and no GitHub account at all. Note what it does *not* cover: a repository's visibility is checked inside `register`, which a dry run never reaches, so a `+` line is a plan and not a promise.
+**`apply --dry-run` is the one exception, and only for the plan.** It reads the pools file and the pool configs, prints what it would do, and calls nothing. That makes the whole of `lib/apply.sh` testable with hand-made pool configs under a scratch `RUNPOOL_BASE`, a scratch `RUNPOOL_POOLS_FILE`, and no GitHub account at all. Note what it does *not* cover: a repository's visibility is checked inside `register`, which a dry run never reaches, so a `+` line is a plan and not a promise.
 
 ## Issues
 
