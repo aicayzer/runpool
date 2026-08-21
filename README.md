@@ -53,8 +53,9 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 
 | Command | |
 |---|---|
-| `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--allow-public]` | Create a pool and configure its runners |
+| `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--watch OWNER/REPO,...] [--allow-public]` | Create a pool and configure its runners |
 | `set-count <pool> N` | Change a pool's runner count |
+| `apply [--dry-run] [--file PATH]` | Reconcile the machine to a file describing its pools |
 | `up` / `down <pool>` | Bring a pool online, or stand it down |
 | `status [--json]` | Local state alongside what GitHub actually sees |
 | `pools` | List registered pools |
@@ -68,6 +69,43 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 **`status --json --local` skips the GitHub query**, reporting those fields as `null`. Anything refreshing on a timer should use it: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
 
 `skills/runpool/` is an agent skill for *using* RunPool: wiring a repository to local CI, choosing a scope, and diagnosing a job that queues and never starts.
+
+## Describing a machine's pools
+
+`register` creates one pool from one command, which is the right way to add one pool and the wrong way to describe a machine: the setup then exists only as a sequence somebody remembers running. Put it in `~/.config/runpool/pools` instead, one pool per line, written as its `register` arguments minus the word `register`:
+
+```
+acme  --org acme-inc --count 4 \
+      --watch acme-inc/api, acme-inc/web
+
+side  --repo me/side-project --count 1
+```
+
+```bash
+runpool apply --dry-run   # what would change
+runpool apply
+```
+
+**Reach for `--dry-run` first.** It prints the plan and touches nothing:
+
+```
+  ~ acme         org  acme-inc          count 2 -> 4; watch (none) -> acme-inc/api,acme-inc/web
+  = side         repo me/side-project   up to date (1 runner(s))
+  + build        org  acme-inc          create with 2 runner(s)
+  ? old          repo me/retired        not in the file — left alone ('runpool remove old' to delete it)
+```
+
+A real run prints that same plan in full first, then acts on it under an `applying:` heading, so what was decided and what was done stay separate.
+
+**The file is `~/.config/runpool/pools` unless you say otherwise.** `--file PATH` overrides it for one run and `RUNPOOL_POOLS_FILE` overrides it for good, the same precedence as every other setting: environment, then config file, then the default.
+
+**A `#` comments out the line it is on and nothing else**, and a trailing `\` continues onto the next line — which then has to say something. Uncomment a multi-line pool entirely or not at all; half of one is an error naming both lines, not a pool quietly missing the other half.
+
+**Reconciliation goes one way.** A pool in the file and not on the machine is created, a count or watch list that differs is changed, and **a pool on the machine and not in the file is reported and left alone**. Deleting a pool deregisters its runners with GitHub, and a missing line is far too quiet a way to ask for that, so `remove` stays explicit. Changing a pool's scope or target is reported as a conflict rather than applied, because the runners are registered against the old one.
+
+The file holds no credentials and nothing machine-specific, so **a second machine gets the same pools by getting the same file.** That is the point of it: `register` does not become wrong, it just stops being the thing you copy.
+
+**`--watch` matters for organisation pools.** GitHub reports queued runs per repository and not per organisation, so an org pool with nothing watched never wakes on its own. `register` takes it too, so a single pool created by hand is no worse off than one from the file; on a repo pool both refuse it, because such a pool already polls its own target.
 
 ## Raycast extension
 

@@ -14,27 +14,69 @@ _rp_register() {
   _rp_require curl || return 1
   _rp_require tar  || return 1
 
-  local name="$1"; shift
-  [ -n "${name}" ] || { _rp_err "usage: runpool register <pool> --repo OWNER/REPO|--org ORG [--count N]"; return 1; }
+  local name="${1:-}"; [ $# -gt 0 ] && shift
+  [ -n "${name}" ] || { _rp_err "usage: runpool register <pool> --repo OWNER/REPO|--org ORG [--count N] [--watch OWNER/REPO,...] [--allow-public]"; return 1; }
   _rp_valid_pool_name "${name}" || {
     _rp_err "invalid pool name: '${name}'"
     _rp_err "Letters, digits, dot, underscore and hyphen only: the name becomes a directory, a launch-agent label and a JSON field."
     return 1
   }
 
-  local scope="" target="" count="2" allow_public=0 vis="" pub=""
+  local scope="" target="" count="2" watch="" clean="" tok allow_public=0 vis="" pub=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo)         scope="repo"; target="$2"; shift 2 ;;
-      --org)          scope="org";  target="$2"; shift 2 ;;
-      --count)        count="$2";   shift 2 ;;
+      --repo|--org|--count|--watch)
+        # Checked before shifting two, the same way lib/apply.sh checks it.
+        # Without this 'runpool register zz --org' died on a raw '$2: unbound
+        # variable' with an internal line number and no usage message.
+        [ $# -ge 2 ] || { _rp_err "$1 needs a value"; return 1; }
+        case "$1" in
+          --repo)  scope="repo"; target="$2" ;;
+          --org)   scope="org";  target="$2" ;;
+          --count) count="$2" ;;
+          # Repeated --watch accumulates, matching the pools file: one
+          # vocabulary means the same flag given twice means the same thing
+          # in both places.
+          --watch) watch="${watch},$2" ;;
+        esac
+        shift 2
+        ;;
       --allow-public) allow_public=1; shift ;;
       *) _rp_err "unknown flag: $1"; return 1 ;;
     esac
   done
   [ -n "${scope}" ] && [ -n "${target}" ] || { _rp_err "one of --repo OWNER/REPO or --org ORG is required"; return 1; }
-  case "${count}" in ''|*[!0-9]*) _rp_err "--count must be a positive integer"; return 1 ;; esac
-  [ "${count}" -ge 1 ] || { _rp_err "--count must be at least 1"; return 1; }
+
+  # The same validators lib/apply.sh runs over the pools file. They lived in
+  # lib/common.sh with only that one caller, so a target given on the command
+  # line reached the config file unchecked and 'runpool register x --org a"b'
+  # wrote POOL_TARGET="a"b" — a config that then fails to source at all, taking
+  # the pool with it.
+  if [ "${scope}" = "org" ]; then
+    _rp_valid_gh_name "${target}" || { _rp_err "'${target}' is not an organisation name"; return 1; }
+  else
+    _rp_valid_gh_repo "${target}" || { _rp_err "'${target}' is not OWNER/REPO"; return 1; }
+  fi
+  _rp_valid_count "${count}" || { _rp_err "--count: $(_rp_count_rule), got '${count}'"; return 1; }
+
+  # Spaces are dropped so that --watch "a/b, c/d" reads as the pools file
+  # writes it. Entries are rebuilt from what was validated rather than kept as
+  # typed, so ',a/b' cannot be checked as one entry and stored as two.
+  watch="${watch#,}"; watch="${watch// /}"
+  if [ -n "${watch}" ]; then
+    # A repo pool polls its own target and _rp_autoscale never reads POOL_WATCH
+    # for one. Refused rather than ignored: silently doing nothing is how a
+    # pool ends up never waking and nobody knowing why.
+    [ "${scope}" = "org" ] || {
+      _rp_err "--watch applies to org pools only — a repo pool polls ${target} itself"
+      return 1
+    }
+    for tok in $(echo "${watch}" | tr ',' ' '); do
+      _rp_valid_gh_repo "${tok}" || { _rp_err "watched repository '${tok}' is not OWNER/REPO"; return 1; }
+      clean="${clean},${tok}"
+    done
+    watch="${clean#,}"
+  fi
 
   # Whose job the public-repository check is depends on the scope, and the two
   # cases are genuinely different.
@@ -120,7 +162,14 @@ _rp_register() {
     i=$(( i + 1 ))
   done
 
-  cat >| "$(_rp_pool_conf "${name}")" <<CONF
+  # POOL_WATCH is written here, in the same file write as everything else,
+  # rather than added afterwards by whoever called this. An org pool with no
+  # watch list never autoscales, so a create that succeeds and a write that
+  # follows it leaves a window where a crash produces a pool that works, looks
+  # healthy, and silently never wakes — with nothing recording why. One write,
+  # no window. Repo pools get no line at all: they poll their own target.
+  {
+    cat <<CONF
 POOL_NAME="${name}"
 POOL_SCOPE="${scope}"
 POOL_TARGET="${target}"
@@ -128,6 +177,8 @@ POOL_COUNT="${count}"
 POOL_DIR="${dir_base}"
 POOL_LABELS="${labels}"
 CONF
+    if [ -n "${watch}" ]; then printf 'POOL_WATCH="%s"\n' "${watch}"; fi
+  } >| "$(_rp_pool_conf "${name}")"
   _rp_log "pool '${name}' registered: ${count} runner(s) on ${scope} ${target} (stopped)"
   _rp_log "it will come up on its own when a job queues, or now with: runpool up ${name}"
 }
@@ -147,12 +198,40 @@ _rp_write_pool_count() {
     && mv -f "${conf}.tmp" "${conf}"
 }
 
+# The watched repositories an org pool autoscales on. Only `apply`'s change
+# path uses this: a create writes POOL_WATCH inside register's own heredoc, so
+# a pool never exists without the watch list it was asked for.
+#
+# Rebuilt whole and moved into place, exactly like _rp_write_pool_count, and
+# for a sharper reason than symmetry. This used to append when the line was
+# absent, and against a config whose last line had no newline the append landed
+# on the end of POOL_LABELS:
+#
+#   POOL_LABELS="self-hosted,macOS,ARM64,acme"POOL_WATCH="acme-inc/api"
+#
+# which corrupts POOL_LABELS permanently and leaves POOL_WATCH empty. POOL_LABELS
+# is what `set-count` and `reregister` hand to config.sh, so the runners come
+# back registered under a label set no workflow's runs-on matches, and the pool
+# looks healthy the whole time.
+#
+# awk rather than cat or sed: awk terminates every record with ORS, which is
+# what supplies the newline a file was missing. The value needs no quoting —
+# _rp_valid_gh_repo has already rejected anything but GitHub identifiers and
+# commas.
+_rp_write_pool_watch() {
+  local conf; conf="$(_rp_pool_conf "$1")"
+  awk -v v="$2" '
+    /^POOL_WATCH=/ { print "POOL_WATCH=\"" v "\""; seen = 1; next }
+                   { print }
+    END            { if (!seen) print "POOL_WATCH=\"" v "\"" }
+  ' "${conf}" >| "${conf}.tmp" && mv -f "${conf}.tmp" "${conf}"
+}
+
 _rp_set_count() {
   _rp_require gh || return 1
   local name="$1" want="$2"
   [ -n "${name}" ] && [ -n "${want}" ] || { _rp_err "usage: runpool set-count <pool> <n>"; return 1; }
-  case "${want}" in ''|*[!0-9]*) _rp_err "count must be a positive integer"; return 1 ;; esac
-  [ "${want}" -ge 1 ] || { _rp_err "count must be at least 1"; return 1; }
+  _rp_valid_count "${want}" || { _rp_err "count: $(_rp_count_rule), got '${want}'"; return 1; }
   _rp_load_pool "${name}" || return 1
 
   local have="${POOL_COUNT}"

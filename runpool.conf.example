@@ -13,6 +13,17 @@
 # keep it off any synced or shared volume.
 # RUNPOOL_BASE="${HOME}/.local/share/runpool"
 
+# The pools `runpool apply` reconciles this machine to. Defaults to
+# ~/.config/runpool/pools; see runpool.pools.example. Unlike everything else
+# here it holds no secrets and nothing machine-specific, so it is the one file
+# worth carrying to a second machine. `runpool apply --file PATH` overrides it
+# for a single run.
+#
+# Derived from XDG_CONFIG_HOME rather than from this file's own directory, so
+# pointing RUNPOOL_CONFIG at /dev/null does not also lose the pools file. The
+# corollary is that neither RUNPOOL_CONFIG nor RUNPOOL_BASE isolates this one.
+# RUNPOOL_POOLS_FILE="${HOME}/.config/runpool/pools"
+
 # Prefix for every launch-agent label this installation owns. Change it only if
 # two installations must coexist on one machine.
 # RUNPOOL_LABEL_NS="runpool"

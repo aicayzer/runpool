@@ -35,6 +35,8 @@ export RUNPOOL_SELF
 . "${RUNPOOL_ROOT}/lib/common.sh"
 # shellcheck source=lib/lifecycle.sh
 . "${RUNPOOL_ROOT}/lib/lifecycle.sh"
+# shellcheck source=lib/apply.sh
+. "${RUNPOOL_ROOT}/lib/apply.sh"
 # shellcheck source=lib/scheduler.sh
 . "${RUNPOOL_ROOT}/lib/scheduler.sh"
 # shellcheck source=lib/notify.sh
@@ -46,10 +48,19 @@ _rp_help() {
   cat <<'HELP'
 runpool — on-demand self-hosted GitHub Actions runner pools for macOS
 
-  register <pool> --repo OWNER/REPO|--org ORG [--count N] [--allow-public]
+  register <pool> --repo OWNER/REPO|--org ORG [--count N]
+                  [--watch OWNER/REPO,...] [--allow-public]
                            create a pool and configure its runners (left stopped)
+                           --watch is org pools only: the repositories polled
+                           for queued work, without which one never autoscales
                            a public repo is refused; --allow-public overrides it
+                           (repo scope only)
   set-count <pool> N       change a pool's runner count after registration
+  apply [--dry-run] [--file PATH]
+                           reconcile this machine to a file describing its
+                           pools: create what is missing, resize what differs,
+                           report what is not in the file. Never deletes.
+                           --dry-run prints the plan and changes nothing
   up|down <pool>           bring a pool online / stand it down
   up-all|down-all          every pool
   status [--json] [--local]
@@ -70,6 +81,8 @@ Routing lives in each repository's workflow (runs-on), not here. This tool
 controls only whether runners are running.
 
 Configuration: ~/.config/runpool/config  (see runpool.conf.example)
+Pools:         ~/.config/runpool/pools   (see runpool.pools.example)
+               override with RUNPOOL_POOLS_FILE, or per run with --file
 HELP
 }
 
@@ -77,6 +90,7 @@ cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "${cmd}" in
   register)       _rp_register "$@" ;;
   set-count)      _rp_set_count "$@" ;;
+  apply)          _rp_apply "$@" ;;
   reregister)     _rp_reregister "$@" ;;
   up)             _rp_up "$@" ;;
   down)           _rp_down "$@" ;;

@@ -38,7 +38,21 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
 Most changes need runners, which means a GitHub account and a Mac. Two things make that less painful:
 
 - **`contrib/demo-status.sh`** answers `status` with invented pools, so anything consuming the JSON can be developed with no runners at all.
-- **`RUNPOOL_BASE`** points RunPool at a scratch directory, so you can register throwaway pools without touching a real setup. Environment beats config, deliberately, so a single invocation can be isolated.
+- **`RUNPOOL_BASE`** points RunPool at a scratch directory, so you can register throwaway pools without touching a real setup. Environment beats config, deliberately, so a single invocation can be isolated. Set `RUNPOOL_LOG_DIR` alongside it: the log defaults to `~/Library/Logs/runpool` and a test will otherwise write into a real installation's log.
+- **`RUNPOOL_POOLS_FILE`, or `apply --file PATH`, as well.** `RUNPOOL_BASE` does **not** move the pools file: that is derived from `XDG_CONFIG_HOME`, deliberately, so that isolating the config does not lose it. Isolate the base and forget this one and `runpool apply` reads your **real** pools file and tries to register every pool in it into the scratch base — with real registrations against real GitHub targets.
+- **`runpool apply --dry-run`** calls nothing and changes nothing, so all of `lib/apply.sh` can be exercised against hand-written pool config files with no GitHub account.
+
+Which makes the whole isolated invocation:
+
+```bash
+RUNPOOL_BASE=/tmp/rp-test \
+RUNPOOL_LOG_DIR=/tmp/rp-test/logs \
+RUNPOOL_CONFIG=/dev/null \
+RUNPOOL_POOLS_FILE=/tmp/rp-test/pools \
+  ./bin/runpool apply --dry-run
+```
+
+`/dev/null` is a valid value for both of those: the config assigns nothing and the pools file declares no pools.
 
 ## Commits and pull requests
 
