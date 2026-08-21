@@ -18,6 +18,7 @@ RUNPOOL_CONFIG="${RUNPOOL_CONFIG:-${XDG_CONFIG_HOME:-${HOME}/.config}/runpool/co
 # invocation at a scratch directory. That matters for anything testing this
 # on a machine that already has a config, the Homebrew test block included.
 _rp_env_BASE="${RUNPOOL_BASE:-}"
+_rp_env_POOLS_FILE="${RUNPOOL_POOLS_FILE:-}"
 _rp_env_LOG_DIR="${RUNPOOL_LOG_DIR:-}"
 _rp_env_LABEL_NS="${RUNPOOL_LABEL_NS:-}"
 _rp_env_IDLE_SECS="${RUNPOOL_IDLE_SECS:-}"
@@ -37,6 +38,7 @@ set -a
 set +a
 
 [ -n "${_rp_env_BASE}" ]        && RUNPOOL_BASE="${_rp_env_BASE}"
+[ -n "${_rp_env_POOLS_FILE}" ]  && RUNPOOL_POOLS_FILE="${_rp_env_POOLS_FILE}"
 [ -n "${_rp_env_LOG_DIR}" ]     && RUNPOOL_LOG_DIR="${_rp_env_LOG_DIR}"
 [ -n "${_rp_env_LABEL_NS}" ]    && RUNPOOL_LABEL_NS="${_rp_env_LABEL_NS}"
 [ -n "${_rp_env_IDLE_SECS}" ]   && RUNPOOL_IDLE_SECS="${_rp_env_IDLE_SECS}"
@@ -44,14 +46,15 @@ set +a
 [ -n "${_rp_env_NOTIFY_CMD}" ]  && RUNPOOL_NOTIFY_CMD="${_rp_env_NOTIFY_CMD}"
 [ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
 [ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
-unset _rp_env_BASE _rp_env_LOG_DIR _rp_env_LABEL_NS _rp_env_IDLE_SECS \
-      _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK _rp_env_TELEMETRY
+unset _rp_env_BASE _rp_env_POOLS_FILE _rp_env_LOG_DIR _rp_env_LABEL_NS \
+      _rp_env_IDLE_SECS _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
+      _rp_env_TELEMETRY
 
 # Restored values need exporting again: the restore above is a plain assignment
 # and happens after 'set -a' was turned off.
 export RUNPOOL_BASE RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
        RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_TELEMETRY \
-       RUNPOOL_CONFIG
+       RUNPOOL_CONFIG RUNPOOL_POOLS_FILE
 
 # Where runners, pool definitions, launch agents and state live. Never the
 # repository: it holds registration credentials.
@@ -66,6 +69,14 @@ RUNPOOL_ACTIVITY="${RUNPOOL_STATE_DIR}/activity"
 RUNPOOL_PAUSE_FLAG="${RUNPOOL_STATE_DIR}/paused"
 # shellcheck disable=SC2034  # read by lib/scheduler.sh
 RUNPOOL_LAST_CLEAN="${RUNPOOL_STATE_DIR}/last-clean"
+
+# The pools `runpool apply` reconciles to. Beside the config rather than under
+# RUNPOOL_BASE, because it is written by a person and copied between machines,
+# while everything under the base is runtime state this tool owns. Derived from
+# XDG_CONFIG_HOME directly and not from RUNPOOL_CONFIG, so pointing the config
+# at /dev/null to isolate a test does not also lose the pools file.
+# shellcheck disable=SC2034  # read by lib/apply.sh
+RUNPOOL_POOLS_FILE="${RUNPOOL_POOLS_FILE:-${XDG_CONFIG_HOME:-${HOME}/.config}/runpool/pools}"
 
 # Prefix for every launch-agent label this tool owns. Configurable so two
 # installations on one machine cannot collide.
@@ -137,6 +148,29 @@ _rp_valid_pool_name() {
     *[!A-Za-z0-9._-]*) return 1 ;;
   esac
   return 0
+}
+
+# A GitHub owner or repository name, by the same reasoning and the same rule.
+# These matter because `apply` is the first thing to write POOL_TARGET and
+# POOL_WATCH from a file rather than from a command line, and _rp_status_json
+# prints both without escaping on the stated grounds that they are GitHub
+# identifiers. This is what keeps that stated assumption true.
+_rp_valid_gh_name() {
+  case "$1" in
+    ''|.|..)           return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
+# OWNER/REPO: exactly one slash, with a valid name either side. The rejecting
+# patterns come first so that '/x', 'x/' and 'a/b/c' never reach the split.
+_rp_valid_gh_repo() {
+  case "$1" in
+    */*/*|/*|*/) return 1 ;;
+    */*)         _rp_valid_gh_name "${1%%/*}" && _rp_valid_gh_name "${1#*/}" ;;
+    *)           return 1 ;;
+  esac
 }
 
 # Load POOL_* for pool $1 into the caller's scope. POOL_WATCH is optional and

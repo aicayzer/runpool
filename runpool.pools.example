@@ -1,0 +1,60 @@
+# runpool pools — copy to ~/.config/runpool/pools
+#
+# What this machine is meant to have. `runpool apply` reconciles the machine to
+# it; `runpool apply --dry-run` prints what would change and touches nothing.
+#
+# Every example below is commented out, so this file as shipped declares no
+# pools and `runpool apply` on it does nothing. Uncomment and edit. An empty
+# file is valid and means "I am not describing this machine here".
+#
+# This is the file to copy when a second machine should have the same pools.
+# It holds no credentials and nothing machine-specific, so it is safe to keep
+# in a dotfiles repository alongside anything else you carry between machines.
+#
+# One pool per line, written exactly as its `register` arguments minus the word
+# `register`. Blank lines and '#' comments are ignored, and a trailing '\'
+# continues onto the next line.
+#
+#   <name>  --org ORG | --repo OWNER/REPO
+#           [--count N]              runners in the pool; default 2
+#           [--watch OWNER/REPO,...] org pools only, see below
+#           [--allow-public]         only consulted when the pool is created
+#
+# Reconciliation goes one way. A pool here and not on the machine is created; a
+# count or watch list that differs is changed; a pool on the machine and not
+# here is reported and LEFT ALONE. Deleting a pool deregisters its runners with
+# GitHub, so that stays an explicit `runpool remove <pool>`.
+#
+# Changing a pool's scope or target is reported as a conflict rather than
+# applied, because the runners are registered against the old one. Remove the
+# pool and apply again.
+
+# ---------------------------------------------------------------------------
+# An organisation pool. Every repository in the org can use these runners.
+# ---------------------------------------------------------------------------
+# --watch names the repositories to poll for queued work while the pool is
+# down. GitHub reports queued runs per repository and not per organisation, so
+# without it an org pool never wakes on its own and every job waits for someone
+# to run `runpool up`. Only repositories you actually point at the pool belong
+# here: each one costs an API call per tick while the pool is down.
+#
+# A repo pool needs no --watch. It polls its own target, and giving it one is
+# refused rather than ignored.
+
+# acme  --org acme-inc --count 4 \
+#       --watch acme-inc/api, acme-inc/web, acme-inc/infra
+
+# ---------------------------------------------------------------------------
+# A personal repository. GitHub has no user-account scope, so a repo outside an
+# organisation needs its own pool and cannot borrow the one above.
+# ---------------------------------------------------------------------------
+
+# side  --repo me/side-project --count 1
+
+# ---------------------------------------------------------------------------
+# A second machine
+# ---------------------------------------------------------------------------
+# Copy this file across, drop the pools that machine should not have, and run
+# `runpool apply --dry-run` before `runpool apply`. Pool names are per machine,
+# so two machines may use the same names against the same org; the runners
+# register under distinct names because those carry the hostname.

@@ -42,12 +42,25 @@ else
   echo "kept existing ${CONFIG_DIR}/config"
 fi
 
+# No chmod here, unlike the config above: the pools file holds no credentials,
+# which is the whole reason it is safe to copy between machines.
+if [ ! -f "${CONFIG_DIR}/pools" ]; then
+  cp "${ROOT}/runpool.pools.example" "${CONFIG_DIR}/pools"
+  echo "wrote ${CONFIG_DIR}/pools (a commented template, declaring nothing yet)"
+else
+  echo "kept existing ${CONFIG_DIR}/pools"
+fi
+
 cat <<'NEXT'
 
 Next:
   runpool register <pool> --repo OWNER/REPO   # or --org ORG
   runpool schedule install                    # background autoscale and clean
   runpool status
+
+Or describe every pool in ~/.config/runpool/pools and reconcile to it:
+  runpool apply --dry-run                     # what would change
+  runpool apply
 
 Pools come up on their own when a job queues. Nothing starts at login.
 NEXT

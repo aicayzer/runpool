@@ -38,7 +38,8 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
 Most changes need runners, which means a GitHub account and a Mac. Two things make that less painful:
 
 - **`contrib/demo-status.sh`** answers `status` with invented pools, so anything consuming the JSON can be developed with no runners at all.
-- **`RUNPOOL_BASE`** points RunPool at a scratch directory, so you can register throwaway pools without touching a real setup. Environment beats config, deliberately, so a single invocation can be isolated.
+- **`RUNPOOL_BASE`** points RunPool at a scratch directory, so you can register throwaway pools without touching a real setup. Environment beats config, deliberately, so a single invocation can be isolated. Set `RUNPOOL_LOG_DIR` alongside it: the log defaults to `~/Library/Logs/runpool` and a test will otherwise write into a real installation's log.
+- **`runpool apply --dry-run`** calls nothing and changes nothing, so all of `lib/apply.sh` can be exercised against hand-written pool config files under a scratch `RUNPOOL_BASE`, with no GitHub account.
 
 ## Commits and pull requests
 

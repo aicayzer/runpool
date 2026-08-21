@@ -13,6 +13,12 @@
 # keep it off any synced or shared volume.
 # RUNPOOL_BASE="${HOME}/.local/share/runpool"
 
+# The pools `runpool apply` reconciles this machine to. Defaults to
+# ~/.config/runpool/pools; see runpool.pools.example. Unlike everything else
+# here it holds no secrets and nothing machine-specific, so it is the one file
+# worth carrying to a second machine.
+# RUNPOOL_POOLS_FILE="${HOME}/.config/runpool/pools"
+
 # Prefix for every launch-agent label this installation owns. Change it only if
 # two installations must coexist on one machine.
 # RUNPOOL_LABEL_NS="runpool"

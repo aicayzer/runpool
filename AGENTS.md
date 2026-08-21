@@ -26,8 +26,10 @@ Break any of these and the tool stops being what it is.
 bin/runpool          the executable and its dispatcher
 lib/common.sh        config, logging, pool loading, launch agents, deregistration
 lib/lifecycle.sh     register, set-count, up, down, reregister, remove
+lib/apply.sh         the pools file, and reconciling the machine to it
 lib/scheduler.sh     status, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
+lib/stats.sh         job durations from recorded telemetry
 contrib/             optional pieces the user opts into: job hook, webhook notifier,
                      demo status fixture
 skills/runpool/      agent skill for *using* runpool, shipped with the tool
@@ -63,7 +65,9 @@ The background is transparent and there are no baked-in rounded corners, so the 
 
 ## Configuration precedence
 
-Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **If you add a setting, add it to both lists**, or it silently becomes un-overridable.
+Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **A new setting has to be added in four places in that block** — the snapshot, the restore, the `unset`, and the `export` — or it silently becomes un-overridable, or leaks a `_rp_env_*` variable, or fails to reach a child process.
+
+`RUNPOOL_POOLS_FILE` is deliberately derived from `XDG_CONFIG_HOME` rather than from `RUNPOOL_CONFIG`'s directory, so that pointing the config at `/dev/null` to isolate a test does not also move the pools file somewhere unexpected.
 
 ## Working on it
 
@@ -84,7 +88,9 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
 RUNPOOL_BASE=/tmp/rp-test RUNPOOL_CONFIG=/dev/null ./bin/runpool status --json
 ```
 
-**Anything that registers, resizes or removes a pool talks to the real GitHub API and to real runners.** There is no dry-run. Verify destructive changes against a throwaway private repository, and never while a job is in flight — the tool refuses on purpose, and forcing past that kills live jobs.
+**Anything that registers, resizes or removes a pool talks to the real GitHub API and to real runners.** `register`, `set-count`, `reregister` and `remove` have no dry-run and there is nowhere sensible to add one, because the work *is* the API call. Verify destructive changes against a throwaway private repository, and never while a job is in flight — the tool refuses on purpose, and forcing past that kills live jobs.
+
+**`apply --dry-run` is the one exception, and only for the plan.** It reads the pools file and the pool configs, prints what it would do, and calls nothing. That makes the whole of `lib/apply.sh` testable with hand-made pool configs under a scratch `RUNPOOL_BASE` and no GitHub account at all. Note what it does *not* cover: a repository's visibility is checked inside `register`, which a dry run never reaches, so a `+` line is a plan and not a promise.
 
 ## Issues
 

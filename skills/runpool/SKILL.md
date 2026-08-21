@@ -42,6 +42,8 @@ runpool register <name> --repo OWNER/REPO --count 2  # a single repo
 runpool schedule install                             # once per machine
 ```
 
+**Adding several pools, or setting up a second machine?** Describe them in a file and reconcile to it instead — see *Declaring a machine's pools* below.
+
 **2. Routing.** In the workflow, route the job:
 
 ```yaml
@@ -51,6 +53,35 @@ runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
 Then set the repository variable `CI_RUNNER` to `self-hosted`. The fallback keeps the workflow working for anyone without the pool, and the variable means switching back to hosted is one setting rather than a commit.
 
 **Never add an automatic fallback to hosted runners.** On macOS that silently costs ten times as much, and if the hosted allowance is exhausted it fails anyway. A job waiting for a pool that is down is the correct behaviour.
+
+## Declaring a machine's pools
+
+`~/.config/runpool/pools` describes what the machine should have, one pool per line, written as its `register` arguments minus the word `register`. `runpool apply` reconciles the machine to it.
+
+```
+acme  --org acme-inc --count 4 \
+      --watch acme-inc/api, acme-inc/web
+
+side  --repo me/side-project --count 1
+```
+
+```bash
+runpool apply --dry-run    # always this first
+runpool apply
+```
+
+**Always run `--dry-run` and show the user the plan before applying.** Applying registers runners with GitHub and can resize a pool downward, which deregisters real runners.
+
+Read the plan by its first character: `+` create, `~` change, `=` unchanged, `?` on the machine but not in the file, `!` conflict.
+
+- **`apply` never deletes.** A pool that is on the machine and not in the file is reported and left alone. If the user wants it gone, that is `runpool remove <pool>`, explicitly.
+- **`!` means the scope or target differs** from what the runners are registered against. `apply` will not fix that; remove the pool and apply again. Say so rather than working around it.
+- **`apply` exits non-zero on a conflict or a parse error**, and names the offending line by number.
+- **A public repository is still refused**, by `register`, at the moment the pool is actually created. A dry run does not reach that check, so a `+` line is not a promise the create will succeed.
+
+**Prefer this over a sequence of `register` commands whenever there is more than one pool, or more than one machine.** The file is the thing you copy; a remembered sequence of commands is not. `register` is still right for adding a single pool to a machine that has no such file.
+
+**`--watch` is org-only and matters.** GitHub reports queued runs per repository, not per organisation, so an org pool with nothing watched never autoscales and every job waits for a manual `runpool up`. `register` cannot set it at all ([#19](https://github.com/aicayzer/runpool/issues/19)), which is a reason to reach for `apply` for org pools specifically. On a repo pool it is refused, because the pool already polls its own target.
 
 ## Which scope
 
@@ -87,6 +118,7 @@ runpool status
 - **`running N/N` but `github 0/N`** — the runners started but are not reaching GitHub. Same fix.
 - **`GLOBAL: paused`** — someone hit the kill switch. `runpool resume`.
 - **`running 0/N` and the job is genuinely queued** — the tick brings a pool up within about a minute. Wait one minute before intervening. `runpool up <pool>` forces it.
+- **`running 0/N` on an *org* pool that never comes up on its own** — check the pool's `watch` array in `status --json`. If it is empty, autoscale has nothing to poll, because GitHub reports queued runs per repository rather than per organisation. Add the repository to the pool's line in `~/.config/runpool/pools` and `runpool apply`.
 - **Everything looks right but the job still waits** — check routing rather than capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's.
 
 ```bash

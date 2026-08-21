@@ -147,6 +147,22 @@ _rp_write_pool_count() {
     && mv -f "${conf}.tmp" "${conf}"
 }
 
+# The watched repositories an org pool autoscales on. Appended rather than
+# replaced when the line is absent, because `register` writes no POOL_WATCH at
+# all and every pool it created therefore lacks one.
+#
+# '|' as the sed delimiter, since a watch list is full of slashes. Both halves
+# are safe: _rp_valid_gh_repo has already rejected anything containing either.
+_rp_write_pool_watch() {
+  local conf; conf="$(_rp_pool_conf "$1")"
+  if grep -q '^POOL_WATCH=' "${conf}" 2>/dev/null; then
+    sed "s|^POOL_WATCH=.*|POOL_WATCH=\"$2\"|" "${conf}" >| "${conf}.tmp" \
+      && mv -f "${conf}.tmp" "${conf}"
+  else
+    printf 'POOL_WATCH="%s"\n' "$2" >> "${conf}"
+  fi
+}
+
 _rp_set_count() {
   _rp_require gh || return 1
   local name="$1" want="$2"
