@@ -504,7 +504,7 @@ _rp_clean() {
   # Every local declared once, at the top. Re-running 'local' for an existing
   # local inside a loop makes some shells print it as a typeset assignment,
   # which once leaked stray lines into the nightly log.
-  local only="${1:-}" p freed_kb=0 sz rd wd dd td live keep vols nvols
+  local only="${1:-}" p freed_kb=0 sz rd wd dd td live keep vols nvols ntmp utmp
   for p in $(_rp_pool_names); do
     [ -n "${only}" ] && [ "${only}" != "${p}" ] && continue
     _rp_load_pool "${p}" || continue
@@ -588,6 +588,39 @@ _rp_clean() {
       nvols=$(printf '%s\n' "${vols}" | wc -l | tr -d ' ')
       printf '%s\n' "${vols}" | xargs docker volume rm >/dev/null 2>&1 || true
       _rp_log "clean: pruned ${nvols} anonymous dangling docker volume(s)"
+    fi
+  fi
+
+  # Foundation item-replacement directories in the per-user temp root.
+  #
+  # Opening a SwiftData store on a file URL makes Foundation create one of
+  # these and never remove it: roughly six per run of a Swift test suite that
+  # touches a file-backed container. They accumulate without bound, and macOS
+  # reports that path as "System Data", so nothing an operator looks at shows
+  # them growing. One reading passed ten thousand entries.
+  #
+  # Two things make this safe to sweep here and unsafe to sweep casually.
+  # The path is shared with every process the user runs, unlike the per-runner
+  # temp above, so only entries matching Foundation's own name are touched and
+  # only ones untouched for days. These directories exist for the moment of an
+  # atomic file replacement; one that has sat for three days was abandoned by
+  # a process that is no longer running. Anything newer is left alone, which
+  # also means a job running right now cannot be interfered with.
+  #
+  # Not restricted to runner activity on purpose: the same leak comes from
+  # local development on this machine, and it is the same directory either way.
+  ntmp=0
+  utmp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"
+  if [ -n "${utmp}" ] && [ -d "${utmp}" ]; then
+    sz=$(du -sk "${utmp}" 2>/dev/null | awk '{print $1}')
+    while IFS= read -r td; do
+      [ -d "${td}" ] || continue
+      rm -rf "${td}" 2>/dev/null && ntmp=$(( ntmp + 1 ))
+    done < <(find "${utmp%/}" -mindepth 1 -maxdepth 1 -type d \
+               -name 'TemporaryDirectory.*' -mtime +2 2>/dev/null)
+    if [ "${ntmp}" -gt 0 ]; then
+      freed_kb=$(( freed_kb + sz - $(du -sk "${utmp}" 2>/dev/null | awk '{print $1}') ))
+      _rp_log "clean: swept ${ntmp} abandoned Foundation temp dir(s)"
     fi
   fi
 
