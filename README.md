@@ -57,17 +57,18 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | `set-count <pool> N` | Change a pool's runner count |
 | `apply [--dry-run] [--file PATH]` | Reconcile the machine to a file describing its pools |
 | `up` / `down <pool>` | Bring a pool online, or stand it down |
-| `status [--json]` | Local state alongside what GitHub actually sees |
+| `status [--json] [--local]` | Local state alongside what GitHub actually sees |
 | `doctor` | Why is nothing picking this up. Reports; changes nothing |
 | `pools` | List registered pools |
 | `reregister <pool>` | Recreate GitHub registrations, keeping the local install |
 | `remove <pool>` | Deregister and delete a pool |
 | `clean [pool]` | Prune work directories, temp, diagnostics, old binaries, caches |
 | `stats [--queue]` | What jobs actually cost, from recorded telemetry. `--queue` adds the wait before each job started |
-| `pause` / `resume` | Global kill switch |
+| `pause [pool]` / `resume [pool]` | Global kill switch, or persistent per-pool pause |
 | `schedule install\|remove` | The background agents that drive everything above |
+| `migrate-storage [--dry-run]` | Move a legacy installation into macOS storage |
 
-**`status --json --local` skips the GitHub query**, reporting those fields as `null`. Anything refreshing on a timer should use it: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
+**`status --json --local` skips the GitHub query**, reporting those fields as `null`. The root `paused` field is the global kill switch; every pool also carries its own additive `paused` field. Anything refreshing on a timer should use `--local`: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
 
 **`doctor` answers "why is nothing picking this up" in one command.** It checks `gh` and its authentication, that GitHub still has the registrations, that the launch agents exist — including the tick agent, which nothing else looks at and without which no pool autoscales at all — and then disk headroom, config permissions and the organisation's runner-group setting. Each failure comes with what to do about it, and it exits non-zero when something is actually wrong. It reports and repairs nothing, so it is safe to run at any moment, including mid-job.
 
@@ -109,6 +110,33 @@ A real run prints that same plan in full first, then acts on it under an `applyi
 The file holds no credentials and nothing machine-specific, so **a second machine gets the same pools by getting the same file.** That is the point of it: `register` does not become wrong, it just stops being the thing you copy.
 
 **`--watch` matters for organisation pools.** GitHub reports queued runs per repository and not per organisation, so an org pool with nothing watched never wakes on its own. `register` takes it too, so a single pool created by hand is no worse off than one from the file; on a repo pool both refuse it, because such a pool already polls its own target.
+
+## Storage and migration
+
+**Required state lives in `~/Library/Application Support/runpool`.** That includes runner installations and credentials, pool definitions, pause state, generated launch agents and telemetry. **Regenerable data lives in `~/Library/Caches/runpool`**: job work trees, checked-out repositories, downloaded actions and tools, package stores, temp directories and runner downloads. Logs remain in `~/Library/Logs/runpool`; the config and pools file remain under `~/.config/runpool`.
+
+`RUNPOOL_BASE`, `RUNPOOL_CACHE_DIR` and `RUNPOOL_LOG_DIR` can override those roots, with the usual precedence: environment, config file, then default. Existing `RUNPOOL_BASE` installations remain active until migrated, so upgrading never silently strands registrations.
+
+Preview a legacy migration first:
+
+```bash
+runpool migrate-storage --dry-run
+runpool migrate-storage
+runpool status --local
+runpool doctor
+```
+
+Migration refuses while a job is running, stops only idle runners, copies runner state into Application Support, moves regenerable per-runner data into Caches, rewrites each runner's absolute work folder and regenerates launch agents. It retains the legacy tree until you have verified the new installation. Remove it only afterwards. For a custom legacy `RUNPOOL_BASE`, use the exact `--from` and `--to` command printed by migration:
+
+```bash
+runpool migrate-storage --remove-legacy
+# Or, for a custom legacy root:
+runpool migrate-storage --from /old/runpool --to "$HOME/Library/Application Support/runpool" --remove-legacy
+```
+
+## Pausing pools
+
+**`runpool pause` and `runpool resume` remain the global controls.** Global pause stops every runner immediately and disables autoscaling. **`runpool pause <pool>` is different:** it safely stands down one idle pool and persists that pool's pause state. A paused pool remains registered, is skipped by autoscaling, and refuses `runpool up <pool>` until `runpool resume <pool>` is run. `down <pool>` remains a temporary stand-down and does not pause the pool.
 
 ## Raycast extension
 

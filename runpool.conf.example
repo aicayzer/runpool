@@ -8,10 +8,14 @@
 # umask would otherwise leave this readable by every user on the machine:
 #   chmod 600 ~/.config/runpool/config
 
-# Where runners, pool definitions, launch agents and state live.
-# Defaults to ~/.local/share/runpool. Registration credentials live here, so
-# keep it off any synced or shared volume.
-# RUNPOOL_BASE="${HOME}/.local/share/runpool"
+# Required state: runner installations and credentials, pool definitions,
+# pause state and generated launch agents. Defaults to macOS Application
+# Support. Keep it off any synced or shared volume.
+# RUNPOOL_BASE="${HOME}/Library/Application Support/runpool"
+
+# Regenerable data: job work trees, downloaded actions and tools, per-runner
+# package caches, temp directories and runner archives. Defaults to Caches.
+# RUNPOOL_CACHE_DIR="${HOME}/Library/Caches/runpool"
 
 # The pools `runpool apply` reconciles this machine to. Defaults to
 # ~/.config/runpool/pools; see runpool.pools.example. Unlike everything else
