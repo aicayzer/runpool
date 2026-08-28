@@ -18,12 +18,20 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_file() { [ -f "$1" ] || fail "missing file: $1"; }
 assert_dir() { [ -d "$1" ] || fail "missing directory: $1"; }
 assert_contains() { grep -F "$2" "$1" >/dev/null || fail "${1} does not contain ${2}"; }
+assert_link() { [ -L "$1" ] || fail "missing symlink: $1"; }
 
 mkdir -p "${legacy_dir}/pools" "${legacy_dir}/agents" "${legacy_dir}/state/pools" \
          "${legacy_dir}/alpha/runner-1/_work/repository" \
          "${legacy_dir}/alpha/runner-1/.pnpm-store" \
          "${legacy_dir}/alpha/runner-1/.npm-cache" \
+         "${legacy_dir}/alpha/runner-1/bin.2.336.0" \
+         "${legacy_dir}/alpha/runner-1/externals.2.336.0" \
          "${legacy_dir}/alpha/runner-1/tmp" "${config_dir}" "${log_dir}"
+
+touch "${legacy_dir}/alpha/runner-1/bin.2.336.0/Runner.Listener" \
+      "${legacy_dir}/alpha/runner-1/externals.2.336.0/node"
+ln -s "${legacy_dir}/alpha/runner-1/bin.2.336.0" "${legacy_dir}/alpha/runner-1/bin"
+ln -s "${legacy_dir}/alpha/runner-1/externals.2.336.0" "${legacy_dir}/alpha/runner-1/externals"
 
 cat >| "${legacy_dir}/pools/alpha.conf" <<CONF
 POOL_NAME="alpha"
@@ -63,6 +71,10 @@ assert_contains "${config_dir}/runpool.conf" "RUNPOOL_BASE=\"${support_dir}\""
 assert_contains "${support_dir}/pools/alpha.conf" "POOL_DIR=\"${support_dir}/runners/alpha\""
 assert_contains "${support_dir}/pools/alpha.conf" "POOL_CACHE_DIR=\"${cache_dir}/pools/alpha\""
 assert_file "${support_dir}/runners/alpha/runner-1/.runner"
+assert_link "${support_dir}/runners/alpha/runner-1/bin"
+assert_link "${support_dir}/runners/alpha/runner-1/externals"
+[ "$(readlink "${support_dir}/runners/alpha/runner-1/bin")" = "bin.2.336.0" ] || fail "bin link remained absolute"
+[ "$(readlink "${support_dir}/runners/alpha/runner-1/externals")" = "externals.2.336.0" ] || fail "externals link remained absolute"
 assert_contains "${support_dir}/runners/alpha/runner-1/.runner" "\"workFolder\":\"${cache_dir}/pools/alpha/runner-1/work\""
 assert_file "${cache_dir}/pools/alpha/runner-1/work/repository/file"
 assert_file "${cache_dir}/pools/alpha/runner-1/pnpm/file"
@@ -96,6 +108,8 @@ env RUNPOOL_CACHE_DIR="${cache_dir}" RUNPOOL_CONFIG="${config_dir}/runpool.conf"
     "${repo_dir}/bin/runpool" migrate-storage --from "${legacy_dir}" --to "${support_dir}" --remove-legacy \
     >/dev/null || fail "legacy removal failed"
 [ ! -e "${legacy_dir}" ] || fail "legacy installation remained"
+assert_file "${support_dir}/runners/alpha/runner-1/bin/Runner.Listener"
+assert_file "${support_dir}/runners/alpha/runner-1/externals/node"
 
 # An empty native root must not make an existing XDG installation invisible.
 # This is the compatibility path a user takes simply by installing the new
