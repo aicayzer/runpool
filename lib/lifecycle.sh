@@ -371,7 +371,7 @@ _rp_up() {
     i=$(( i + 1 ))
   done
   _rp_touch_activity
-  _rp_log "up '$1': ${loaded}/${POOL_COUNT} runner(s) online"
+  _rp_log "Started pool '$1' (${loaded} of ${POOL_COUNT} runners online)."
 }
 
 # Refuses while a job is in flight unless --force. Unloading a launch agent
@@ -395,7 +395,7 @@ _rp_down() {
     _rp_agent_loaded "${label}" && launchctl unload "${plist}" 2>/dev/null
     i=$(( i + 1 ))
   done
-  _rp_log "down '$1': runners stopped (still registered, offline)"
+  _rp_log "Stopped pool '$1'. Runners remain registered."
 }
 
 _rp_up_all()   { local p; for p in $(_rp_pool_names); do _rp_up "${p}"; done; }

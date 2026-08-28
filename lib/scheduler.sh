@@ -59,7 +59,7 @@ _rp_running_in() {
 # cleanly, looks healthy in every local check, and picks up nothing. Reporting
 # only the local view hid exactly that for three weeks.
 _rp_status() {
-  local as_json=0 local_only=0 arg
+  local as_json=0 local_only=0 arg total_running=0 total_busy=0 p running busy gh reg online gh_display note warn=0
   for arg in "$@"; do
     case "${arg}" in
       --json)  as_json=1 ;;
@@ -69,31 +69,42 @@ _rp_status() {
   done
   [ "${as_json}" = "1" ] && { _rp_status_json "${local_only}"; return $?; }
 
-  if _rp_paused; then echo "GLOBAL: paused (runpool off)"; else echo "GLOBAL: active"; fi
-  local total_running=0 total_busy=0 p running busy gh reg online note warn=0
+  if _rp_paused; then echo "Status: paused"; else echo "Status: active"; fi
+  echo ""
+  printf "  %-10s %-6s %-20s %7s %5s  %s\n" "Pool" "Scope" "Target" "Running" "Busy" "GitHub"
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
     running="$(_rp_running_in "${p}" "${POOL_COUNT}")"
     busy="$(_rp_busy_in "${POOL_DIR}")"
-    gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
     total_running=$(( total_running + running )); total_busy=$(( total_busy + busy ))
 
-    note=""
-    case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}")" in
-      unreachable)  note="  (github unreachable)" ;;
-      unregistered) note="  ** NOT REGISTERED — jobs will queue forever **"; warn=1 ;;
-      offline)      note="  ** started but not connecting to github **"; warn=1 ;;
-      miscount)     note="  (github has ${reg}, pool expects ${POOL_COUNT})" ;;
-    esac
+    if [ "${local_only}" = "1" ]; then
+      gh_display="not checked"
+      note=""
+    else
+      gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
+      gh_display="${online}/${reg}"
+      note=""
+      case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}")" in
+        unreachable)  gh_display="unreachable" ;;
+        unregistered) note="  (not registered; jobs will queue)"; warn=1 ;;
+        offline)      note="  (started but not connected)"; warn=1 ;;
+        miscount)     note="  (pool expects ${POOL_COUNT})" ;;
+      esac
+    fi
 
-    printf "  %-10s %-4s %-20s  running %s/%s  busy %s  github %s/%s%s\n" \
-      "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${running}" "${POOL_COUNT}" \
-      "${busy}" "${online}" "${reg}" "${note}"
+    printf "  %-10s %-6s %-20s %7s %5s  %s%s\n" \
+      "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${running}/${POOL_COUNT}" \
+      "${busy}" "${gh_display}" "${note}"
   done
-  echo "  ----"
-  echo "  TOTAL running ${total_running}, busy ${total_busy}"
-  echo "  github column is online/registered as GitHub sees it"
-  [ "${warn}" = "1" ] && echo "  fix a broken pool with: runpool reregister <pool>"
+  echo ""
+  echo "Total: ${total_running} runners online, ${total_busy} jobs running."
+  if [ "${local_only}" = "1" ]; then
+    echo "GitHub: not checked (--local)."
+  else
+    echo "GitHub: online / registered."
+  fi
+  [ "${warn}" = "1" ] && echo "Fix a broken pool with: runpool reregister <pool>"
   return 0
 }
 
@@ -679,8 +690,8 @@ _rp_tick() {
 # ---------------------------------------------------------------------------
 # pause / resume — global kill switch, default resumed
 # ---------------------------------------------------------------------------
-_rp_pause()  { : >| "${RUNPOOL_PAUSE_FLAG}"; _rp_down_all --force; _rp_log "paused: all runners down, autoscale off"; }
-_rp_resume() { rm -f "${RUNPOOL_PAUSE_FLAG}"; _rp_log "resumed: on-demand again"; }
+_rp_pause()  { : >| "${RUNPOOL_PAUSE_FLAG}"; _rp_down_all --force; _rp_log "Paused: all runners stopped; autoscaling disabled."; }
+_rp_resume() { rm -f "${RUNPOOL_PAUSE_FLAG}"; _rp_log "Resumed: on-demand scaling enabled."; }
 
 # ---------------------------------------------------------------------------
 # schedule — install or remove the background agents

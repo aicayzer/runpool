@@ -20,6 +20,7 @@ On-demand self-hosted GitHub Actions runner pools for macOS. Pools wake when job
 command -v runpool || echo "not installed"
 runpool status
 runpool doctor    # if anything looks wrong, or a job is queued and waiting
+runpool help <command>  # command-specific options and guidance
 ```
 
 Not installed:

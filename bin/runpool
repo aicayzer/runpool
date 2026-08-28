@@ -45,54 +45,119 @@ export RUNPOOL_SELF
 . "${RUNPOOL_ROOT}/lib/stats.sh"
 
 _rp_help() {
-  cat <<'HELP'
-runpool — on-demand self-hosted GitHub Actions runner pools for macOS
+  local command="${1:-}"
+  case "${command}" in
+    "")
+      cat <<'HELP'
+Usage: runpool <command>
 
-  register <pool> --repo OWNER/REPO|--org ORG [--count N]
-                  [--watch OWNER/REPO,...] [--allow-public]
-                           create a pool and configure its runners (left stopped)
-                           --watch is org pools only: the repositories polled
-                           for queued work, without which one never autoscales
-                           a public repo is refused; --allow-public overrides it
-                           (repo scope only)
-  set-count <pool> N       change a pool's runner count after registration
-  apply [--dry-run] [--file PATH]
-                           reconcile this machine to a file describing its
-                           pools: create what is missing, resize what differs,
-                           report what is not in the file. Never deletes.
-                           --dry-run prints the plan and changes nothing
-  up|down <pool>           bring a pool online / stand it down
-  up-all|down-all          every pool
-  status [--json] [--local]
-                           local state alongside what GitHub actually sees;
-                           --local skips the GitHub query entirely
-  doctor                   why is nothing picking this up: gh, registrations,
-                           launch agents, disk, permissions. Reports and
-                           changes nothing; exits non-zero if something is wrong
-  pools                    list registered pools
-  stats [--queue]          what recorded jobs cost, to size the pool with data
-                           --queue adds the wait before a runner picked each
-                           job up, joining the records to GitHub: one API call
-                           per run, so it is not part of plain stats
-  reregister <pool>        recreate GitHub registrations, keep the local install
-  remove <pool>            deregister and delete a pool
+Manage on-demand self-hosted GitHub Actions runner pools on macOS.
 
-  tick                     autoscale, idle-down, contention and health checks
-  autoscale|sweep          bring pools up on queued work / stand idle ones down
-  clean [pool]             prune work dirs, temp, diagnostics, old binaries, caches
-  pause|resume             global kill switch (default resumed)
-  schedule install|remove  the background agents that run tick and clean
+Options:
+  -h, --help                    display help for command
 
-Routing lives in each repository's workflow (runs-on), not here. This tool
-controls only whether runners are running.
+Commands:
+  register <pool> [options]     Create a runner pool and leave it stopped
+  set-count <pool> <n>          Change a pool's runner count
+  apply [options]               Reconcile this machine with a pools file
+  up <pool>                     Bring a pool online
+  down <pool>                   Stand a pool down
+  up-all                        Bring every pool online
+  down-all                      Stand every pool down
+  status [options]              Show local state and GitHub's runner state
+  doctor                        Check why a pool is not picking up work
+  pools                         List registered pools
+  stats [options]               Show recorded job durations and queue times
+  reregister <pool>             Recreate a pool's GitHub registrations
+  remove <pool>                 Deregister and delete a pool
+  tick                          Run autoscaling and pool health checks
+  autoscale                     Bring pools up when work is queued
+  sweep                         Stand idle pools down
+  clean [pool]                  Remove runner work, temporary files, and caches
+  pause                         Pause all automatic pool actions
+  resume                        Resume automatic pool actions
+  schedule <install|remove>     Manage the background tick and clean agents
+  help [command]                display help for command
 
-Configuration: ~/.config/runpool/config  (see runpool.conf.example)
-Pools:         ~/.config/runpool/pools   (see runpool.pools.example)
-               override with RUNPOOL_POOLS_FILE, or per run with --file
+Run 'runpool help <command>' for command-specific options and guidance.
 HELP
+      ;;
+    register)
+      cat <<'HELP'
+Usage: runpool register <pool> (--repo OWNER/REPO | --org ORG) [options]
+
+Create a runner pool and leave it stopped.
+
+Options:
+  --repo OWNER/REPO             Register a repository-scoped pool
+  --org ORG                     Register an organisation-scoped pool
+  --count <n>                   Set the runner count (default: 2)
+  --watch OWNER/REPO,...        Repositories an organisation pool watches for work
+  --allow-public                Allow a public repository (repository scope only)
+HELP
+      ;;
+    set-count)
+      echo "Usage: runpool set-count <pool> <n>"
+      ;;
+    apply)
+      cat <<'HELP'
+Usage: runpool apply [options]
+
+Reconcile this machine with a pools file. Pools absent from the file are reported
+but never removed.
+
+Options:
+  --dry-run                     Print the plan without making changes
+  --file <path>                 Read pools from a different file
+HELP
+      ;;
+    up|down)
+      echo "Usage: runpool ${command} <pool>"
+      ;;
+    up-all|down-all|tick|autoscale|sweep|pause|resume|pools|doctor)
+      echo "Usage: runpool ${command}"
+      ;;
+    status)
+      cat <<'HELP'
+Usage: runpool status [options]
+
+Show local runner state alongside GitHub's view.
+
+Options:
+  --json                        Output machine-readable JSON
+  --local                       Skip the GitHub query
+HELP
+      ;;
+    stats)
+      cat <<'HELP'
+Usage: runpool stats [options]
+
+Show recorded job durations.
+
+Options:
+  --queue                       Join records to GitHub to include queue times
+HELP
+      ;;
+    reregister|remove)
+      echo "Usage: runpool ${command} <pool>"
+      ;;
+    clean)
+      echo "Usage: runpool clean [pool]"
+      ;;
+    schedule)
+      echo "Usage: runpool schedule <install|remove>"
+      ;;
+    *)
+      _rp_err "unknown command: ${command}"
+      return 2
+      ;;
+  esac
 }
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
+case "${1:-}" in
+  -h|--help) _rp_help "${cmd}"; exit $? ;;
+esac
 case "${cmd}" in
   register)       _rp_register "$@" ;;
   set-count)      _rp_set_count "$@" ;;
@@ -115,6 +180,7 @@ case "${cmd}" in
   resume)         _rp_resume ;;
   schedule)       _rp_schedule "$@" ;;
   rewrite-agents) _rp_rewrite_plists ;;
-  -h|--help|help|"") _rp_help ;;
+  help)           _rp_help "${1:-}" ;;
+  -h|--help|"")  _rp_help ;;
   *) _rp_err "unknown command: ${cmd}"; exit 2 ;;
 esac

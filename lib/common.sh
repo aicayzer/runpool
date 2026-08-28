@@ -113,7 +113,7 @@ mkdir -p "${RUNPOOL_POOL_DIR}" "${RUNPOOL_AGENT_DIR}" \
 # Output
 # ---------------------------------------------------------------------------
 _rp_log() {
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "${RUNPOOL_LOG}" >&2
+  echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')  $*" | tee -a "${RUNPOOL_LOG}" >&2
 }
 _rp_err() { echo "runpool: $*" >&2; }
 
