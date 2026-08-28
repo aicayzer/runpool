@@ -93,6 +93,7 @@ _rp_status() {
       esac
     fi
 
+    _rp_pool_paused "${p}" && note="  (paused)${note}"
     printf "  %-10s %-6s %-20s %7s %5s  %s%s\n" \
       "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${running}/${POOL_COUNT}" \
       "${busy}" "${gh_display}" "${note}"
@@ -121,7 +122,7 @@ _rp_status() {
 # is thousands a day, and it makes a passive readout fail whenever the network
 # does, which is the opposite of what a passive readout is for.
 _rp_status_json() {
-  local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" wr wfirst
+  local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" pool_paused="false" wr wfirst
   _rp_paused && paused="true"
   # Machine state belongs here rather than being recomputed by every caller.
   # The contention threshold in particular is configurable, so a caller that
@@ -130,10 +131,10 @@ _rp_status_json() {
   local load cores
   load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
   cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 0)
-  printf '{"paused":%s,"local":%s,"machine":{"load":%s,"cores":%s,"load_warn":%s},"paths":{"base":"%s","log":"%s","log_dir":"%s","telemetry":"%s"},"pools":[' \
+  printf '{"paused":%s,"local":%s,"machine":{"load":%s,"cores":%s,"load_warn":%s},"paths":{"base":"%s","cache":"%s","log":"%s","log_dir":"%s","telemetry":"%s"},"pools":[' \
     "${paused}" "$( [ "${local_only}" = "1" ] && echo true || echo false )" \
     "${load:-0}" "${cores:-0}" "${RUNPOOL_LOAD_WARN}" \
-    "${RUNPOOL_BASE}" "${RUNPOOL_LOG}" "${RUNPOOL_LOG_DIR}" "${RUNPOOL_BASE}/telemetry/jobs.jsonl"
+    "${RUNPOOL_BASE}" "${RUNPOOL_CACHE_DIR}" "${RUNPOOL_LOG}" "${RUNPOOL_LOG_DIR}" "${RUNPOOL_BASE}/telemetry/jobs.jsonl"
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
     running="$(_rp_running_in "${p}" "${POOL_COUNT}")"
@@ -147,8 +148,9 @@ _rp_status_json() {
     fi
     [ "${first}" = "1" ] || printf ','
     first=0
-    printf '{"name":"%s","scope":"%s","target":"%s","count":%s,"running":%s,"busy":%s,"github_registered":%s,"github_online":%s,"watch":[' \
-      "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}" "${running}" "${busy}" "${reg}" "${online}"
+    _rp_pool_paused "${p}" && pool_paused="true" || pool_paused="false"
+    printf '{"name":"%s","scope":"%s","target":"%s","count":%s,"running":%s,"busy":%s,"paused":%s,"github_registered":%s,"github_online":%s,"watch":[' \
+      "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}" "${running}" "${busy}" "${pool_paused}" "${reg}" "${online}"
     # An org pool serves many repositories and only its config knows which.
     # Without this a caller cannot show what a pool actually covers.
     wfirst=1
@@ -220,7 +222,7 @@ _rp_doctor() {
   [ $# -eq 0 ] || { _rp_err "doctor takes no arguments (usage: runpool doctor)"; return 1; }
 
   local gh_ok=1 pools=0 seen_orgs="" p running gh reg online
-  local tick clean i missing avail_kb free mode other
+  local tick clean i missing avail_kb cache_avail_kb free mode other
 
   _rp_doctor_fails=0
   _rp_doctor_warns=0
@@ -236,6 +238,8 @@ _rp_doctor() {
   else
     _rp_doctor_ok "not paused"
   fi
+  [ "${RUNPOOL_USING_LEGACY}" = "1" ] && _rp_doctor_note \
+    "legacy storage is active at ${RUNPOOL_BASE}; run 'runpool migrate-storage --dry-run' to preview the move"
 
   # --- gh ----------------------------------------------------------------
   # _rp_require tests for the binary and stops there, which is the whole gap:
@@ -298,6 +302,8 @@ _rp_doctor() {
       continue
     fi
     running="$(_rp_running_in "${p}" "${POOL_COUNT}")"
+    _rp_pool_paused "${p}" && _rp_doctor_note \
+      "${p}: paused; it will not autoscale or start until 'runpool resume ${p}'"
 
     # A pool is meant to sit down, so 'not loaded' says nothing and is not
     # reported. A MISSING plist is different: _rp_up refuses on the first one
@@ -381,6 +387,17 @@ _rp_doctor() {
         _rp_doctor_ok "${free} free on ${RUNPOOL_BASE}"
       fi ;;
   esac
+  cache_avail_kb=$(df -k "${RUNPOOL_CACHE_DIR}" 2>/dev/null | awk 'NR == 2 {print $4}')
+  case "${cache_avail_kb}" in
+    ''|*[!0-9]*) _rp_doctor_note "could not read the free space on ${RUNPOOL_CACHE_DIR}" ;;
+    *)
+      if [ "${cache_avail_kb}" -lt 1048576 ]; then
+        free="$(( cache_avail_kb / 1024 ))MB"
+      else
+        free="$(( cache_avail_kb / 1048576 ))GB"
+      fi
+      _rp_doctor_ok "${free} free on cache root ${RUNPOOL_CACHE_DIR}" ;;
+  esac
 
   # --- security -----------------------------------------------------------
   echo ""
@@ -463,6 +480,7 @@ _rp_autoscale() {
   local p up queued q wr
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
+    _rp_pool_paused "${p}" && continue
     up="$(_rp_running_in "${p}" "${POOL_COUNT}")"
     [ "${up}" -gt 0 ] && continue
     queued=0
@@ -515,7 +533,7 @@ _rp_clean() {
   # Every local declared once, at the top. Re-running 'local' for an existing
   # local inside a loop makes some shells print it as a typeset assignment,
   # which once leaked stray lines into the nightly log.
-  local only="${1:-}" p freed_kb=0 sz rd wd dd td live keep vols nvols ntmp utmp
+  local only="${1:-}" p freed_kb=0 sz rd wd dd td i cache_dir pnpm_dir live keep vols nvols ntmp utmp
   for p in $(_rp_pool_names); do
     [ -n "${only}" ] && [ "${only}" != "${p}" ] && continue
     _rp_load_pool "${p}" || continue
@@ -528,9 +546,11 @@ _rp_clean() {
     for rd in "${POOL_DIR}"/runner-*/; do
       [ -d "${rd}" ] || continue
       rd="${rd%/}"
+      i="${rd##*/runner-}"
+      cache_dir="$(_rp_runner_cache_dir "${p}" "${i}")"
 
       # Job checkouts and build output.
-      wd="${rd}/_work"
+      wd="$(_rp_runner_work_dir "${p}" "${i}")"
       if [ -d "${wd}" ]; then
         sz=$(du -sk "${wd}" 2>/dev/null | awk '{print $1}')
         find "${wd:?}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
@@ -544,7 +564,12 @@ _rp_clean() {
       # component in the absolute path silently disables anything applying
       # dotfile-ignore rules to it. An install predating the rename still holds
       # the old directory, which would otherwise sit uncollected forever.
-      for td in "${rd}/tmp" "${rd}/.tmp"; do
+      if [ "${POOL_LEGACY_LAYOUT}" = "1" ]; then
+        td="${rd}/.tmp"
+      else
+        td=""
+      fi
+      for td in "${cache_dir}/tmp" "${td}"; do
         if [ -d "${td}" ]; then
           sz=$(du -sk "${td}" 2>/dev/null | awk '{print $1}')
           find "${td:?}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
@@ -552,8 +577,12 @@ _rp_clean() {
         fi
       done
       # The legacy directory goes for good once emptied; the current one stays.
-      rmdir "${rd}/.tmp" 2>/dev/null
-      mkdir -p "${rd}/tmp" 2>/dev/null
+      if [ "${POOL_LEGACY_LAYOUT}" = "1" ]; then
+        rmdir "${rd}/.tmp" 2>/dev/null
+        mkdir -p "${rd}/tmp" 2>/dev/null
+      else
+        mkdir -p "${cache_dir}/tmp" 2>/dev/null
+      fi
 
       # Runner diagnostics. Rotated loosely and reaching ~150MB per runner. Job
       # logs live in the GitHub UI, so nothing here is the only copy.
@@ -581,10 +610,11 @@ _rp_clean() {
 
       # Package stores are a cache worth keeping but an unbounded one. Prune
       # rather than delete, so the next run starts warm.
-      if [ -d "${rd}/.pnpm-store" ] && command -v pnpm >/dev/null 2>&1; then
-        sz=$(du -sk "${rd}/.pnpm-store" 2>/dev/null | awk '{print $1}')
-        npm_config_store_dir="${rd}/.pnpm-store" pnpm store prune >/dev/null 2>&1
-        freed_kb=$(( freed_kb + sz - $(du -sk "${rd}/.pnpm-store" 2>/dev/null | awk '{print $1}') ))
+      if [ "${POOL_LEGACY_LAYOUT}" = "1" ]; then pnpm_dir="${rd}/.pnpm-store"; else pnpm_dir="${cache_dir}/pnpm"; fi
+      if [ -d "${pnpm_dir}" ] && command -v pnpm >/dev/null 2>&1; then
+        sz=$(du -sk "${pnpm_dir}" 2>/dev/null | awk '{print $1}')
+        npm_config_store_dir="${pnpm_dir}" pnpm store prune >/dev/null 2>&1
+        freed_kb=$(( freed_kb + sz - $(du -sk "${pnpm_dir}" 2>/dev/null | awk '{print $1}') ))
       fi
     done
   done
@@ -690,8 +720,38 @@ _rp_tick() {
 # ---------------------------------------------------------------------------
 # pause / resume — global kill switch, default resumed
 # ---------------------------------------------------------------------------
-_rp_pause()  { : >| "${RUNPOOL_PAUSE_FLAG}"; _rp_down_all --force; _rp_log "Paused: all runners stopped; autoscaling disabled."; }
-_rp_resume() { rm -f "${RUNPOOL_PAUSE_FLAG}"; _rp_log "Resumed: on-demand scaling enabled."; }
+_rp_pause() {
+  local name="${1:-}" busy
+  if [ -z "${name}" ]; then
+    : >| "${RUNPOOL_PAUSE_FLAG}"
+    _rp_down_all --force
+    _rp_log "Paused: all runners stopped; autoscaling disabled."
+    return 0
+  fi
+  _rp_load_pool "${name}" || return 1
+  _rp_pool_paused "${name}" && { _rp_log "Pool '${name}' is already paused."; return 0; }
+  busy="$(_rp_busy_in "${POOL_DIR}")"
+  if [ "${busy}" -gt 0 ]; then
+    _rp_err "'${name}' has ${busy} job(s) running — refusing to pause. Wait for them to finish, then retry."
+    return 1
+  fi
+  : >| "$(_rp_pool_pause_flag "${name}")"
+  _rp_down "${name}" || { rm -f "$(_rp_pool_pause_flag "${name}")"; return 1; }
+  _rp_log "Paused pool '${name}'. It will not start until resumed."
+}
+
+_rp_resume() {
+  local name="${1:-}"
+  if [ -z "${name}" ]; then
+    rm -f "${RUNPOOL_PAUSE_FLAG}"
+    _rp_log "Resumed: on-demand scaling enabled."
+    return 0
+  fi
+  _rp_load_pool "${name}" || return 1
+  _rp_pool_paused "${name}" || { _rp_log "Pool '${name}' is not paused."; return 0; }
+  rm -f "$(_rp_pool_pause_flag "${name}")"
+  _rp_log "Resumed pool '${name}'. It will wake when work is queued."
+}
 
 # ---------------------------------------------------------------------------
 # schedule — install or remove the background agents

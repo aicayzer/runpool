@@ -17,7 +17,7 @@
 # ~/.config/runpool/config, then: runpool rewrite-agents && runpool down-all
 #
 # Set RUNPOOL_TELEMETRY=1 as well and each job also appends one JSON line to
-# <base>/telemetry/jobs.jsonl. That is what `runpool stats` reads. It records
+# Application Support/runpool/telemetry/jobs.jsonl. That is what `runpool stats` reads. It records
 # nothing about the code, only timings and machine state, and it never leaves
 # the machine.
 #
@@ -32,7 +32,16 @@ phase="${1:-started}"
 RUNPOOL_CONFIG="${RUNPOOL_CONFIG:-${XDG_CONFIG_HOME:-${HOME}/.config}/runpool/config}"
 # shellcheck disable=SC1090
 [ -f "${RUNPOOL_CONFIG}" ] && . "${RUNPOOL_CONFIG}" 2>/dev/null
-RUNPOOL_BASE="${RUNPOOL_BASE:-${XDG_DATA_HOME:-${HOME}/.local/share}/runpool}"
+if [ -z "${RUNPOOL_BASE:-}" ]; then
+  RUNPOOL_DEFAULT_BASE="${HOME}/Library/Application Support/runpool"
+  RUNPOOL_LEGACY_BASE="${XDG_DATA_HOME:-${HOME}/.local/share}/runpool"
+  if find "${RUNPOOL_LEGACY_BASE}/pools" -maxdepth 1 -name '*.conf' 2>/dev/null | grep -q . && \
+     ! find "${RUNPOOL_DEFAULT_BASE}/pools" -maxdepth 1 -name '*.conf' 2>/dev/null | grep -q .; then
+    RUNPOOL_BASE="${RUNPOOL_LEGACY_BASE}"
+  else
+    RUNPOOL_BASE="${RUNPOOL_DEFAULT_BASE}"
+  fi
+fi
 RUNPOOL_TELEMETRY="${RUNPOOL_TELEMETRY:-0}"
 
 load1="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}')" || load1="0"

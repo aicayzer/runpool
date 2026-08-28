@@ -18,6 +18,7 @@ RUNPOOL_CONFIG="${RUNPOOL_CONFIG:-${XDG_CONFIG_HOME:-${HOME}/.config}/runpool/co
 # invocation at a scratch directory. That matters for anything testing this
 # on a machine that already has a config, the Homebrew test block included.
 _rp_env_BASE="${RUNPOOL_BASE:-}"
+_rp_env_CACHE_DIR="${RUNPOOL_CACHE_DIR:-}"
 _rp_env_POOLS_FILE="${RUNPOOL_POOLS_FILE:-}"
 _rp_env_LOG_DIR="${RUNPOOL_LOG_DIR:-}"
 _rp_env_LABEL_NS="${RUNPOOL_LABEL_NS:-}"
@@ -38,6 +39,7 @@ set -a
 set +a
 
 [ -n "${_rp_env_BASE}" ]        && RUNPOOL_BASE="${_rp_env_BASE}"
+[ -n "${_rp_env_CACHE_DIR}" ]   && RUNPOOL_CACHE_DIR="${_rp_env_CACHE_DIR}"
 [ -n "${_rp_env_POOLS_FILE}" ]  && RUNPOOL_POOLS_FILE="${_rp_env_POOLS_FILE}"
 [ -n "${_rp_env_LOG_DIR}" ]     && RUNPOOL_LOG_DIR="${_rp_env_LOG_DIR}"
 [ -n "${_rp_env_LABEL_NS}" ]    && RUNPOOL_LABEL_NS="${_rp_env_LABEL_NS}"
@@ -46,20 +48,46 @@ set +a
 [ -n "${_rp_env_NOTIFY_CMD}" ]  && RUNPOOL_NOTIFY_CMD="${_rp_env_NOTIFY_CMD}"
 [ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
 [ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
-unset _rp_env_BASE _rp_env_POOLS_FILE _rp_env_LOG_DIR _rp_env_LABEL_NS \
+unset _rp_env_BASE _rp_env_CACHE_DIR _rp_env_POOLS_FILE _rp_env_LOG_DIR _rp_env_LABEL_NS \
       _rp_env_IDLE_SECS _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
       _rp_env_TELEMETRY
 
 # Restored values need exporting again: the restore above is a plain assignment
 # and happens after 'set -a' was turned off.
-export RUNPOOL_BASE RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
+export RUNPOOL_BASE RUNPOOL_CACHE_DIR RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
        RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_TELEMETRY \
        RUNPOOL_CONFIG RUNPOOL_POOLS_FILE
 
-# Where runners, pool definitions, launch agents and state live. Never the
-# repository: it holds registration credentials.
-RUNPOOL_BASE="${RUNPOOL_BASE:-${XDG_DATA_HOME:-${HOME}/.local/share}/runpool}"
+# Required state belongs in Application Support. Runner installations carry
+# registration credentials, so they are not cache data and never belong in a
+# checkout. An existing pre-native-storage installation remains active until
+# the operator explicitly migrates it; silently switching roots would strand
+# its registrations and leave launch agents pointing at the old tree.
+RUNPOOL_DEFAULT_BASE="${HOME}/Library/Application Support/runpool"
+RUNPOOL_LEGACY_BASE="${XDG_DATA_HOME:-${HOME}/.local/share}/runpool"
+# shellcheck disable=SC2034  # read by migrate-storage in lib/lifecycle.sh
+RUNPOOL_USING_LEGACY=0
+if [ -z "${RUNPOOL_BASE:-}" ]; then
+  # An empty Application Support directory is not an installation. This can
+  # happen when a user created the directory while reading the release notes;
+  # it must not make a populated legacy installation disappear from RunPool.
+  if find "${RUNPOOL_LEGACY_BASE}/pools" -maxdepth 1 -name '*.conf' 2>/dev/null | grep -q . && \
+     ! find "${RUNPOOL_DEFAULT_BASE}/pools" -maxdepth 1 -name '*.conf' 2>/dev/null | grep -q .; then
+    RUNPOOL_BASE="${RUNPOOL_LEGACY_BASE}"
+    # shellcheck disable=SC2034  # read by migrate-storage in lib/lifecycle.sh
+    RUNPOOL_USING_LEGACY=1
+  else
+    RUNPOOL_BASE="${RUNPOOL_DEFAULT_BASE}"
+  fi
+fi
+
+# Work trees, actions, tools, package stores, temporary files and downloaded
+# runner archives are all safe to recreate. They stay outside Application
+# Support so macOS can treat them as cache data and so cleaning never touches
+# registration state.
+RUNPOOL_CACHE_DIR="${RUNPOOL_CACHE_DIR:-${HOME}/Library/Caches/runpool}"
 RUNPOOL_POOL_DIR="${RUNPOOL_BASE}/pools"
+RUNPOOL_RUNNER_DIR="${RUNPOOL_BASE}/runners"
 RUNPOOL_AGENT_DIR="${RUNPOOL_BASE}/agents"
 RUNPOOL_STATE_DIR="${RUNPOOL_BASE}/state"
 RUNPOOL_LOG_DIR="${RUNPOOL_LOG_DIR:-${HOME}/Library/Logs/runpool}"
@@ -67,6 +95,7 @@ RUNPOOL_LOG_DIR="${RUNPOOL_LOG_DIR:-${HOME}/Library/Logs/runpool}"
 RUNPOOL_LOG="${RUNPOOL_LOG_DIR}/runpool.log"
 RUNPOOL_ACTIVITY="${RUNPOOL_STATE_DIR}/activity"
 RUNPOOL_PAUSE_FLAG="${RUNPOOL_STATE_DIR}/paused"
+RUNPOOL_POOL_PAUSE_DIR="${RUNPOOL_STATE_DIR}/pools"
 # shellcheck disable=SC2034  # read by lib/scheduler.sh
 RUNPOOL_LAST_CLEAN="${RUNPOOL_STATE_DIR}/last-clean"
 
@@ -106,8 +135,9 @@ RUNPOOL_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 # machine state only, nothing about the code, and it never leaves the machine.
 RUNPOOL_TELEMETRY="${RUNPOOL_TELEMETRY:-0}"
 
-mkdir -p "${RUNPOOL_POOL_DIR}" "${RUNPOOL_AGENT_DIR}" \
-         "${RUNPOOL_STATE_DIR}" "${RUNPOOL_LOG_DIR}" 2>/dev/null || true
+mkdir -p "${RUNPOOL_POOL_DIR}" "${RUNPOOL_RUNNER_DIR}" "${RUNPOOL_AGENT_DIR}" \
+         "${RUNPOOL_STATE_DIR}" "${RUNPOOL_POOL_PAUSE_DIR}" "${RUNPOOL_CACHE_DIR}" \
+         "${RUNPOOL_LOG_DIR}" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Output
@@ -222,13 +252,19 @@ _rp_load_pool() {
     _rp_err "unknown pool: $1 (see 'runpool pools')"; return 1
   fi
   POOL_NAME=""; POOL_SCOPE=""; POOL_TARGET=""; POOL_COUNT=""
-  POOL_DIR=""; POOL_LABELS=""; POOL_WATCH=""
+  POOL_DIR=""; POOL_CACHE_DIR=""; POOL_LABELS=""; POOL_WATCH=""; POOL_LEGACY_LAYOUT=0
   # shellcheck disable=SC1090
   . "${conf}" || { _rp_err "pool '$1': could not read ${conf}"; return 1; }
   if [ -z "${POOL_SCOPE}" ] || [ -z "${POOL_TARGET}" ] || \
      [ -z "${POOL_COUNT}" ] || [ -z "${POOL_DIR}" ]; then
     _rp_err "pool '$1': ${conf} is incomplete (needs POOL_SCOPE, POOL_TARGET, POOL_COUNT and POOL_DIR)"
     return 1
+  fi
+  # Pool configs before native storage have no cache root. Keep their work and
+  # package stores exactly where they are until migrate-storage rewrites them.
+  if [ -z "${POOL_CACHE_DIR}" ]; then
+    POOL_CACHE_DIR="${POOL_DIR}"
+    POOL_LEGACY_LAYOUT=1
   fi
 }
 
@@ -255,6 +291,27 @@ _rp_agent_loaded() { launchctl list "$1" >/dev/null 2>&1; }
 _rp_touch_activity() { _rp_now >| "${RUNPOOL_ACTIVITY}"; }
 
 _rp_paused() { [ -f "${RUNPOOL_PAUSE_FLAG}" ]; }
+_rp_pool_pause_flag() { echo "${RUNPOOL_POOL_PAUSE_DIR}/$1.paused"; }
+_rp_pool_paused() { [ -f "$(_rp_pool_pause_flag "$1")" ]; }
+
+_rp_runner_cache_dir() { echo "${POOL_CACHE_DIR}/runner-$2"; }
+_rp_runner_work_dir() {
+  if [ "${POOL_LEGACY_LAYOUT}" = "1" ]; then
+    echo "${POOL_DIR}/runner-$2/_work"
+  else
+    echo "${POOL_CACHE_DIR}/runner-$2/work"
+  fi
+}
+
+_rp_prepare_runner_cache() {
+  local cache
+  cache="$(_rp_runner_cache_dir "$1" "$2")"
+  if [ "${POOL_LEGACY_LAYOUT}" = "1" ]; then
+    mkdir -p "${cache}/_work" "${cache}/.pnpm-store" "${cache}/.npm-cache" "${cache}/tmp" 2>/dev/null
+  else
+    mkdir -p "${cache}/work" "${cache}/pnpm" "${cache}/npm" "${cache}/tmp" 2>/dev/null
+  fi
+}
 
 # GitHub API prefix for a pool's scope: orgs/<org> or repos/<owner>/<repo>.
 _rp_scope_path() {
@@ -309,8 +366,8 @@ _rp_fetch_runner_tarball() {
   done
   url="${out%% *}"; digest="${out#* }"
   [ -n "${url}" ] || { _rp_err "could not resolve the osx-arm64 runner tarball after retries"; return 1; }
-  path="${RUNPOOL_BASE}/.cache/${url##*/}"
-  mkdir -p "${RUNPOOL_BASE}/.cache" 2>/dev/null
+  path="${RUNPOOL_CACHE_DIR}/downloads/${url##*/}"
+  mkdir -p "${RUNPOOL_CACHE_DIR}/downloads" 2>/dev/null
   if [ ! -f "${path}" ]; then
     _rp_log "downloading runner: ${url##*/}"
     # '-f' so an HTTP error is a failure. Without it curl writes the error body
@@ -388,7 +445,16 @@ WRAP
 # never starts a runner at login. Pools come up because something asked, or
 # because the tick saw queued work.
 _rp_write_plist() {
-  local label="$1" dir="$2" plist="${RUNPOOL_AGENT_DIR}/$1.plist" hook=""
+  local label="$1" dir="$2" cache_dir="$3" legacy_layout="$4" plist="${RUNPOOL_AGENT_DIR}/$1.plist" hook="" pnpm_dir npm_dir tmp_dir
+  if [ "${legacy_layout}" = "1" ]; then
+    pnpm_dir="${dir}/.pnpm-store"
+    npm_dir="${dir}/.npm-cache"
+    tmp_dir="${dir}/tmp"
+  else
+    pnpm_dir="${cache_dir}/pnpm"
+    npm_dir="${cache_dir}/npm"
+    tmp_dir="${cache_dir}/tmp"
+  fi
   [ -n "${RUNPOOL_JOB_HOOK:-}" ] && { _rp_write_hook_wrappers; hook="${RUNPOOL_BASE}/hooks"; }
   {
     cat <<PLIST
@@ -409,11 +475,11 @@ _rp_write_plist() {
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>npm_config_store_dir</key>
-    <string>${dir}/.pnpm-store</string>
+    <string>${pnpm_dir}</string>
     <key>npm_config_cache</key>
-    <string>${dir}/.npm-cache</string>
+    <string>${npm_dir}</string>
     <key>TMPDIR</key>
-    <string>${dir}/tmp</string>
+    <string>${tmp_dir}</string>
 PLIST
     if [ -n "${hook}" ]; then
       cat <<PLIST
@@ -465,7 +531,9 @@ _rp_rewrite_plists() {
     _rp_load_pool "${p}" || continue
     i=1
     while [ "${i}" -le "${POOL_COUNT}" ]; do
-      _rp_write_plist "$(_rp_label "${p}" "${i}")" "${POOL_DIR}/runner-${i}"
+      _rp_prepare_runner_cache "${p}" "${i}"
+      _rp_write_plist "$(_rp_label "${p}" "${i}")" "${POOL_DIR}/runner-${i}" \
+                      "$(_rp_runner_cache_dir "${p}" "${i}")" "${POOL_LEGACY_LAYOUT}"
       i=$(( i + 1 ))
     done
     _rp_log "rewrote agents for pool '${p}'"

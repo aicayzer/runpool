@@ -136,8 +136,9 @@ _rp_register() {
     esac
   fi
 
-  local dir_base labels tarball i runner_dir runner_name token
-  dir_base="${RUNPOOL_BASE}/${name}"
+  local dir_base cache_base labels tarball i runner_dir cache_dir runner_name token
+  dir_base="${RUNPOOL_RUNNER_DIR}/${name}"
+  cache_base="${RUNPOOL_CACHE_DIR}/pools/${name}"
   labels="self-hosted,macOS,ARM64,${name}"
   tarball="$(_rp_fetch_runner_tarball)" || return 1
   mkdir -p "${dir_base}"
@@ -145,10 +146,12 @@ _rp_register() {
   i=1
   while [ "${i}" -le "${count}" ]; do
     runner_dir="${dir_base}/runner-${i}"
+    cache_dir="${cache_base}/runner-${i}"
     if [ -f "${runner_dir}/.runner" ]; then
       _rp_log "${name} runner-${i}: already registered, skipping"
     else
       mkdir -p "${runner_dir}"
+      mkdir -p "${cache_dir}/work" "${cache_dir}/pnpm" "${cache_dir}/npm" "${cache_dir}/tmp"
       [ -f "${runner_dir}/config.sh" ] || tar -xzf "${tarball}" -C "${runner_dir}" || return 1
       token=$(gh api -X POST "$(_rp_scope_path "${scope}" "${target}")/actions/runners/registration-token" \
                 --jq '.token' 2>/dev/null)
@@ -157,10 +160,10 @@ _rp_register() {
       _rp_log "${name} runner-${i}: registering as '${runner_name}'"
       ( cd "${runner_dir}" && ./config.sh --unattended --replace \
           --url "https://github.com/${target}" --token "${token}" \
-          --name "${runner_name}" --labels "${labels}" --work "_work" \
+          --name "${runner_name}" --labels "${labels}" --work "${cache_dir}/work" \
           >> "${RUNPOOL_LOG}" 2>&1 ) || return 1
     fi
-    _rp_write_plist "$(_rp_label "${name}" "${i}")" "${runner_dir}"
+    _rp_write_plist "$(_rp_label "${name}" "${i}")" "${runner_dir}" "${cache_dir}" 0
     i=$(( i + 1 ))
   done
 
@@ -177,6 +180,7 @@ POOL_SCOPE="${scope}"
 POOL_TARGET="${target}"
 POOL_COUNT="${count}"
 POOL_DIR="${dir_base}"
+POOL_CACHE_DIR="${cache_base}"
 POOL_LABELS="${labels}"
 CONF
     if [ -n "${watch}" ]; then printf 'POOL_WATCH="%s"\n' "${watch}"; fi
@@ -246,7 +250,7 @@ _rp_set_count() {
     return 1
   fi
 
-  local was_up=0 i runner_dir label token runner_name tarball
+  local was_up=0 i runner_dir cache_dir label token runner_name tarball
   _rp_agent_loaded "$(_rp_label "${name}" 1)" && was_up=1
 
   if [ "${want}" -gt "${have}" ]; then
@@ -254,7 +258,9 @@ _rp_set_count() {
     i=$(( have + 1 ))
     while [ "${i}" -le "${want}" ]; do
       runner_dir="${POOL_DIR}/runner-${i}"
+      cache_dir="$(_rp_runner_cache_dir "${name}" "${i}")"
       mkdir -p "${runner_dir}"
+      _rp_prepare_runner_cache "${name}" "${i}"
       [ -f "${runner_dir}/config.sh" ] || tar -xzf "${tarball}" -C "${runner_dir}" || return 1
       if [ ! -f "${runner_dir}/.runner" ]; then
         token=$(gh api -X POST "$(_rp_scope_path "${POOL_SCOPE}" "${POOL_TARGET}")/actions/runners/registration-token" \
@@ -264,10 +270,10 @@ _rp_set_count() {
         _rp_log "${name} runner-${i}: registering as '${runner_name}'"
         ( cd "${runner_dir}" && ./config.sh --unattended --replace \
             --url "https://github.com/${POOL_TARGET}" --token "${token}" \
-            --name "${runner_name}" --labels "${POOL_LABELS}" --work "_work" \
+            --name "${runner_name}" --labels "${POOL_LABELS}" --work "$(_rp_runner_work_dir "${name}" "${i}")" \
             >> "${RUNPOOL_LOG}" 2>&1 ) || return 1
       fi
-      _rp_write_plist "$(_rp_label "${name}" "${i}")" "${runner_dir}"
+      _rp_write_plist "$(_rp_label "${name}" "${i}")" "${runner_dir}" "${cache_dir}" "${POOL_LEGACY_LAYOUT}"
       i=$(( i + 1 ))
     done
   else
@@ -284,6 +290,7 @@ _rp_set_count() {
     i=$(( want + 1 ))
     while [ "${i}" -le "${have}" ]; do
       runner_dir="${POOL_DIR}/runner-${i}"
+      cache_dir="$(_rp_runner_cache_dir "${name}" "${i}")"
       label="$(_rp_label "${name}" "${i}")"
       _rp_agent_loaded "${label}" && launchctl unload "${RUNPOOL_AGENT_DIR}/${label}.plist" 2>/dev/null
       # Deregister before deleting. A runner removed locally but left
@@ -292,6 +299,7 @@ _rp_set_count() {
       _rp_deregister_runner "${runner_dir}" "${POOL_SCOPE}" "${POOL_TARGET}"
       rm -f "${RUNPOOL_AGENT_DIR}/${label}.plist"
       rm -rf "${runner_dir}"
+      [ "${POOL_LEGACY_LAYOUT}" = "1" ] || rm -rf "${cache_dir}"
       _rp_log "${name} runner-${i}: removed"
       i=$(( i + 1 ))
     done
@@ -303,7 +311,9 @@ _rp_set_count() {
   # here is a harmless no-op that keeps one exit path for both.
   _rp_write_pool_count "${name}" "${want}"
   _rp_log "pool '${name}': ${have} -> ${want} runner(s)"
-  [ "${was_up}" = "1" ] && { _rp_load_pool "${name}" && _rp_up "${name}"; }
+  if [ "${was_up}" = "1" ] && ! _rp_pool_paused "${name}"; then
+    _rp_load_pool "${name}" && _rp_up "${name}"
+  fi
   return 0
 }
 
@@ -321,7 +331,7 @@ _rp_reregister() {
   local name="$1"
   [ -n "${name}" ] || { _rp_err "usage: runpool reregister <pool>"; return 1; }
   _rp_load_pool "${name}" || return 1
-  _rp_down "${name}" >/dev/null 2>&1
+  _rp_down "${name}" || return 1
 
   local i runner_dir runner_name token
   i=1
@@ -343,12 +353,227 @@ _rp_reregister() {
     _rp_log "${name} runner-${i}: re-registering as '${runner_name}'"
     ( cd "${runner_dir}" && ./config.sh --unattended --replace \
         --url "https://github.com/${POOL_TARGET}" --token "${token}" \
-        --name "${runner_name}" --labels "${POOL_LABELS}" --work "_work" \
+        --name "${runner_name}" --labels "${POOL_LABELS}" --work "$(_rp_runner_work_dir "${name}" "${i}")" \
         >> "${RUNPOOL_LOG}" 2>&1 ) || return 1
-    _rp_write_plist "$(_rp_label "${name}" "${i}")" "${runner_dir}"
+    _rp_prepare_runner_cache "${name}" "${i}"
+    _rp_write_plist "$(_rp_label "${name}" "${i}")" "${runner_dir}" \
+                    "$(_rp_runner_cache_dir "${name}" "${i}")" "${POOL_LEGACY_LAYOUT}"
     i=$(( i + 1 ))
   done
   _rp_log "pool '${name}': ${POOL_COUNT} runner(s) re-registered (stopped)"
+}
+
+# ---------------------------------------------------------------------------
+# migrate-storage — copy a legacy installation into macOS-native roots
+# ---------------------------------------------------------------------------
+# The migration copies first and leaves the old tree alone. A runner's
+# registration credentials stay valid after its files and workFolder move, but
+# a failed copy must never turn a recoverable layout change into a lost pool.
+# --remove-legacy is deliberately a separate, explicit operation after the
+# new tree has been checked.
+_rp_migrate_pool_names() {
+  find "$1/pools" -maxdepth 1 -name '*.conf' 2>/dev/null \
+    | while read -r f; do basename "${f}" .conf; done
+}
+
+_rp_migrate_update_pool_conf() {
+  local conf="$1" runner_dir="$2" cache_dir="$3" tmp
+  tmp="${conf}.tmp"
+  awk -v runner_dir="${runner_dir}" -v cache_dir="${cache_dir}" '
+    /^POOL_DIR=/ { print "POOL_DIR=\"" runner_dir "\""; next }
+    /^POOL_CACHE_DIR=/ { print "POOL_CACHE_DIR=\"" cache_dir "\""; cache_seen=1; next }
+    { print }
+    END { if (!cache_seen) print "POOL_CACHE_DIR=\"" cache_dir "\"" }
+  ' "${conf}" >| "${tmp}" && mv -f "${tmp}" "${conf}"
+}
+
+_rp_migrate_update_config_base() {
+  local source="$1" target="$2" tmp mode
+  [ -f "${RUNPOOL_CONFIG}" ] || return 0
+  grep -q '^RUNPOOL_BASE=' "${RUNPOOL_CONFIG}" || return 0
+  tmp="${RUNPOOL_CONFIG}.tmp"
+  mode=$(stat -f '%Lp' "${RUNPOOL_CONFIG}" 2>/dev/null) || return 1
+  awk -v target="${target}" '
+    /^RUNPOOL_BASE=/ { print "RUNPOOL_BASE=\"" target "\""; changed=1; next }
+    { print }
+  ' "${RUNPOOL_CONFIG}" >| "${tmp}" || return 1
+  chmod "${mode}" "${tmp}" || return 1
+  mv -f "${tmp}" "${RUNPOOL_CONFIG}" || return 1
+  _rp_log "Updated RUNPOOL_BASE in ${RUNPOOL_CONFIG}: ${source} -> ${target}"
+}
+
+_rp_migrate_update_work_folder() {
+  local runner_dir="$1" work_dir="$2" work_escaped tmp
+  [ -f "${runner_dir}/.runner" ] || return 0
+  grep -q '"workFolder"' "${runner_dir}/.runner" || {
+    _rp_err "${runner_dir}/.runner has no workFolder setting"
+    return 1
+  }
+  work_escaped=$(printf '%s' "${work_dir}" | sed 's/[\\&|]/\\&/g')
+  tmp="${runner_dir}/.runner.tmp"
+  sed -E "s|(\"workFolder\"[[:space:]]*:[[:space:]]*)\"[^\"]*\"|\\1\"${work_escaped}\"|" \
+    "${runner_dir}/.runner" >| "${tmp}" && mv -f "${tmp}" "${runner_dir}/.runner"
+}
+
+_rp_migrate_move_cache_dir() {
+  local from="$1" to="$2"
+  [ -d "${from}" ] || return 0
+  [ ! -e "${to}" ] || { _rp_err "migration target already has ${to}"; return 1; }
+  mkdir -p "$(dirname "${to}")" || return 1
+  mv "${from}" "${to}"
+}
+
+_rp_migrate_storage() {
+  local dry=0 remove_legacy=0 source="" target="" active_base="${RUNPOOL_BASE}" arg p conf old_dir new_dir cache_pool i runner_dir cache_dir busy=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --remove-legacy) remove_legacy=1; shift ;;
+      --from|--to)
+        [ $# -ge 2 ] || { _rp_err "$1 needs a path"; return 1; }
+        if [ "$1" = "--from" ]; then source="$2"; else target="$2"; fi
+        shift 2
+        ;;
+      *) _rp_err "unknown flag: $1 (usage: runpool migrate-storage [--dry-run] [--from PATH] [--to PATH] [--remove-legacy])"; return 1 ;;
+    esac
+  done
+
+  if [ -z "${source}" ]; then
+    if [ "${RUNPOOL_BASE}" != "${RUNPOOL_DEFAULT_BASE}" ] && [ -d "${RUNPOOL_BASE}/pools" ]; then
+      source="${RUNPOOL_BASE}"
+    elif [ -d "${RUNPOOL_LEGACY_BASE}" ]; then
+      source="${RUNPOOL_LEGACY_BASE}"
+    else
+      _rp_err "no legacy installation was found (expected ${RUNPOOL_LEGACY_BASE})"
+      return 1
+    fi
+  fi
+  if [ -z "${target}" ]; then
+    if [ "${source}" = "${RUNPOOL_BASE}" ] && [ "${source}" != "${RUNPOOL_DEFAULT_BASE}" ]; then
+      target="${RUNPOOL_DEFAULT_BASE}"
+    else
+      target="${RUNPOOL_BASE}"
+    fi
+  fi
+  [ -d "${source}" ] || { _rp_err "legacy installation not found: ${source}"; return 1; }
+  [ "${source}" != "${target}" ] || { _rp_err "migration source and target are both ${source}"; return 1; }
+
+  if [ "${remove_legacy}" = "1" ]; then
+    find "${target}/pools" -maxdepth 1 -name '*.conf' 2>/dev/null | grep -q . || {
+      _rp_err "no migrated pool definitions at ${target}"
+      return 1
+    }
+    [ "${dry}" = "1" ] && { echo "Would remove legacy installation: ${source}"; return 0; }
+    rm -rf "${source}"
+    _rp_log "Removed legacy installation: ${source}"
+    return 0
+  fi
+
+  [ -d "${source}/pools" ] || { _rp_err "${source} has no pool definitions"; return 1; }
+  if find "${target}/pools" -maxdepth 1 -name '*.conf' 2>/dev/null | grep -q .; then
+    _rp_err "migration target already has pool definitions: ${target}"
+    return 1
+  fi
+
+  for p in $(_rp_migrate_pool_names "${source}"); do
+    conf="${source}/pools/${p}.conf"
+    POOL_COUNT=""; POOL_DIR=""
+    # shellcheck disable=SC1090
+    . "${conf}" || { _rp_err "could not read ${conf}"; return 1; }
+    [ -n "${POOL_DIR}" ] && [ -n "${POOL_COUNT}" ] || { _rp_err "${conf} is incomplete"; return 1; }
+    busy=$(( busy + $(_rp_busy_in "${POOL_DIR}") ))
+  done
+  if [ "${busy}" -gt 0 ]; then
+    _rp_err "${busy} job(s) are running — refusing to migrate. Wait for them to finish, then retry."
+    return 1
+  fi
+
+  echo "Storage migration"
+  echo "  From: ${source}"
+  echo "  To:   ${target}"
+  echo "  Cache: ${RUNPOOL_CACHE_DIR}"
+  for p in $(_rp_migrate_pool_names "${source}"); do echo "  Pool: ${p}"; done
+  if [ "${dry}" = "1" ]; then
+    echo "  Dry run: no files or launch agents were changed."
+    return 0
+  fi
+
+  # A listener with no job is still a live runner process. Work is already
+  # known idle above, so unloading these agents is safe and prevents the old
+  # tree from continuing to serve jobs after the copied agents are rewritten.
+  for p in $(_rp_migrate_pool_names "${source}"); do
+    conf="${source}/pools/${p}.conf"
+    POOL_COUNT=""
+    # shellcheck disable=SC1090
+    . "${conf}" || return 1
+    i=1
+    while [ "${i}" -le "${POOL_COUNT}" ]; do
+      launchctl unload "${source}/agents/$(_rp_label "${p}" "${i}").plist" 2>/dev/null || true
+      i=$(( i + 1 ))
+    done
+  done
+
+  mkdir -p "${target}/pools" "${target}/runners" "${target}/agents" "${target}/state" \
+           "${target}/state/pools" "${target}/hooks" "${target}/telemetry" \
+           "${RUNPOOL_CACHE_DIR}/downloads" || return 1
+  for p in $(_rp_migrate_pool_names "${source}"); do
+    conf="${source}/pools/${p}.conf"
+    POOL_COUNT=""; POOL_DIR=""
+    # shellcheck disable=SC1090
+    . "${conf}" || return 1
+    old_dir="${POOL_DIR}"
+    new_dir="${target}/runners/${p}"
+    cache_pool="${RUNPOOL_CACHE_DIR}/pools/${p}"
+    [ ! -e "${new_dir}" ] || { _rp_err "migration target already has ${new_dir}"; return 1; }
+    cp -R "${old_dir}" "${new_dir}" || return 1
+    cp "${conf}" "${target}/pools/${p}.conf" || return 1
+    i=1
+    while [ "${i}" -le "${POOL_COUNT}" ]; do
+      runner_dir="${new_dir}/runner-${i}"
+      cache_dir="${cache_pool}/runner-${i}"
+      mkdir -p "${cache_dir}" || return 1
+      _rp_migrate_move_cache_dir "${runner_dir}/_work" "${cache_dir}/work" || return 1
+      _rp_migrate_move_cache_dir "${runner_dir}/.pnpm-store" "${cache_dir}/pnpm" || return 1
+      _rp_migrate_move_cache_dir "${runner_dir}/.npm-cache" "${cache_dir}/npm" || return 1
+      if [ -d "${runner_dir}/tmp" ]; then
+        _rp_migrate_move_cache_dir "${runner_dir}/tmp" "${cache_dir}/tmp" || return 1
+      elif [ -d "${runner_dir}/.tmp" ]; then
+        _rp_migrate_move_cache_dir "${runner_dir}/.tmp" "${cache_dir}/tmp" || return 1
+      fi
+      mkdir -p "${cache_dir}/work" "${cache_dir}/pnpm" "${cache_dir}/npm" "${cache_dir}/tmp" || return 1
+      _rp_migrate_update_work_folder "${runner_dir}" "${cache_dir}/work" || return 1
+      i=$(( i + 1 ))
+    done
+    _rp_migrate_update_pool_conf "${target}/pools/${p}.conf" "${new_dir}" "${cache_pool}" || return 1
+  done
+  for arg in agents state hooks telemetry; do
+    if [ -d "${source}/${arg}" ]; then
+      cp -R "${source}/${arg}/." "${target}/${arg}/" || return 1
+    fi
+  done
+  if [ -d "${source}/.cache" ]; then
+    cp -R "${source}/.cache/." "${RUNPOOL_CACHE_DIR}/downloads/" || return 1
+  fi
+  if [ "${active_base}" = "${source}" ] && [ "${target}" != "${source}" ]; then
+    _rp_migrate_update_config_base "${source}" "${target}" || return 1
+  fi
+
+  # shellcheck disable=SC2034  # read by lib/common.sh helpers below
+  RUNPOOL_BASE="${target}"
+  # shellcheck disable=SC2034  # read by lib/common.sh helpers below
+  RUNPOOL_POOL_DIR="${RUNPOOL_BASE}/pools"
+  # shellcheck disable=SC2034  # read by lib/common.sh helpers below
+  RUNPOOL_RUNNER_DIR="${RUNPOOL_BASE}/runners"
+  # shellcheck disable=SC2034  # read by lib/common.sh helpers below
+  RUNPOOL_AGENT_DIR="${RUNPOOL_BASE}/agents"
+  # shellcheck disable=SC2034  # read by lib/common.sh helpers below
+  RUNPOOL_STATE_DIR="${RUNPOOL_BASE}/state"
+  # shellcheck disable=SC2034  # read by lib/common.sh helpers below
+  RUNPOOL_POOL_PAUSE_DIR="${RUNPOOL_STATE_DIR}/pools"
+  _rp_rewrite_plists || return 1
+  _rp_log "Migrated storage to ${target}. Legacy data remains at ${source}."
+  _rp_log "Verify with: runpool status --local && runpool doctor"
+  _rp_log "After verification, remove it with: runpool migrate-storage --from ${source} --to ${target} --remove-legacy"
 }
 
 # ---------------------------------------------------------------------------
@@ -357,6 +582,7 @@ _rp_reregister() {
 _rp_up() {
   _rp_load_pool "$1" || return 1
   if _rp_paused; then _rp_err "runpool is paused — run 'runpool resume' first"; return 1; fi
+  if _rp_pool_paused "$1"; then _rp_err "pool '$1' is paused — run 'runpool resume $1' first"; return 1; fi
   local i label plist loaded=0
   i=1
   while [ "${i}" -le "${POOL_COUNT}" ]; do
@@ -398,7 +624,7 @@ _rp_down() {
   _rp_log "Stopped pool '$1'. Runners remain registered."
 }
 
-_rp_up_all()   { local p; for p in $(_rp_pool_names); do _rp_up "${p}"; done; }
+_rp_up_all()   { local p; for p in $(_rp_pool_names); do _rp_pool_paused "${p}" || _rp_up "${p}"; done; }
 _rp_down_all() { local p; for p in $(_rp_pool_names); do _rp_down "${p}" "${1:-}"; done; }
 
 # ---------------------------------------------------------------------------
@@ -425,6 +651,8 @@ _rp_remove() {
   if [ "${POOL_DIR}" != "${RUNPOOL_BASE}" ]; then
     case "${POOL_DIR}" in "${RUNPOOL_BASE}/"*) rm -rf "${POOL_DIR}" ;; esac
   fi
+  [ "${POOL_LEGACY_LAYOUT}" = "1" ] || rm -rf "${POOL_CACHE_DIR}"
+  rm -f "$(_rp_pool_pause_flag "$1")"
   rm -f "$(_rp_pool_conf "$1")"
   _rp_log "pool '$1' removed"
 }

@@ -47,6 +47,8 @@ runpool schedule install                             # once per machine
 
 **An org pool needs `--watch` or it never autoscales.** See *`--watch` is org-only and matters* below. A repo pool polls its own target and refuses the flag.
 
+**Pause is persistent when scoped to a pool.** `runpool pause <pool>` safely stands that pool down and prevents either autoscale or `runpool up <pool>` from starting it. Use `runpool resume <pool>` to clear it. Bare `pause` and `resume` remain the global controls; `down <pool>` is only a temporary stand-down.
+
 **Adding several pools, or setting up a second machine?** Describe them in a file and reconcile to it instead — see *Declaring a machine's pools* below.
 
 **2. Routing.** In the workflow, route the job:
@@ -152,6 +154,21 @@ tail -50 ~/Library/Logs/runpool/runpool.log
 ```
 
 The JSON carries each pool's watched repositories and the paths to its logs, so a wrapper never has to guess either.
+
+**The root `paused` field is global; each pool has its own `paused` boolean.** Read both. A paused pool is intentional state, not an unreachable runner.
+
+## Storage migration
+
+New installations keep runner credentials, pool definitions and pause state in `~/Library/Application Support/runpool`, with work trees and per-runner caches in `~/Library/Caches/runpool`. Existing `RUNPOOL_BASE` installations remain active until explicitly migrated.
+
+```bash
+runpool migrate-storage --dry-run
+runpool migrate-storage
+runpool status --local
+runpool doctor
+```
+
+**Do not run migration while a job is active.** RunPool refuses it, preserving registrations and the legacy tree. The old tree is retained after migration; remove it only after verification with `runpool migrate-storage --remove-legacy`. For a custom legacy `RUNPOOL_BASE`, use the exact `--from` and `--to` command printed by migration.
 
 ## Capacity
 

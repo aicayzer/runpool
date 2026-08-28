@@ -30,10 +30,11 @@ case "$1" in
   "local": false,
   "machine": { "load": 3.2, "cores": 10, "load_warn": 20 },
   "paths": {
-    "base": "/Users/you/.local/share/runpool",
-    "log": "/Users/you/.local/share/runpool/logs/runpool.log",
-    "log_dir": "/Users/you/.local/share/runpool/logs",
-    "telemetry": "/Users/you/.local/share/runpool/telemetry/jobs.jsonl"
+    "base": "/Users/you/Library/Application Support/runpool",
+    "cache": "/Users/you/Library/Caches/runpool",
+    "log": "/Users/you/Library/Logs/runpool/runpool.log",
+    "log_dir": "/Users/you/Library/Logs/runpool",
+    "telemetry": "/Users/you/Library/Application Support/runpool/telemetry/jobs.jsonl"
   },
   "pools": [
     {
@@ -43,6 +44,7 @@ case "$1" in
       "count": 4,
       "running": 4,
       "busy": 2,
+      "paused": false,
       "github_registered": 4,
       "github_online": 4,
       "watch": ["github/docs", "github/linguist", "github/gitignore", "github/scientist", "github/codeql-action"]
@@ -54,6 +56,7 @@ case "$1" in
       "count": 2,
       "running": 2,
       "busy": 0,
+      "paused": false,
       "github_registered": 2,
       "github_online": 2,
       "watch": []
@@ -65,6 +68,7 @@ case "$1" in
       "count": 2,
       "running": 0,
       "busy": 0,
+      "paused": true,
       "github_registered": 2,
       "github_online": 0,
       "watch": []

@@ -74,9 +74,10 @@ Commands:
   autoscale                     Bring pools up when work is queued
   sweep                         Stand idle pools down
   clean [pool]                  Remove runner work, temporary files, and caches
-  pause                         Pause all automatic pool actions
-  resume                        Resume automatic pool actions
+  pause [pool]                  Pause every pool, or one pool persistently
+  resume [pool]                 Resume every pool, or one paused pool
   schedule <install|remove>     Manage the background tick and clean agents
+  migrate-storage [options]     Move a legacy installation to macOS storage
   help [command]                display help for command
 
 Run 'runpool help <command>' for command-specific options and guidance.
@@ -114,8 +115,11 @@ HELP
     up|down)
       echo "Usage: runpool ${command} <pool>"
       ;;
-    up-all|down-all|tick|autoscale|sweep|pause|resume|pools|doctor)
+    up-all|down-all|tick|autoscale|sweep|pools|doctor)
       echo "Usage: runpool ${command}"
+      ;;
+    pause|resume)
+      echo "Usage: runpool ${command} [pool]"
       ;;
     status)
       cat <<'HELP'
@@ -147,6 +151,21 @@ HELP
     schedule)
       echo "Usage: runpool schedule <install|remove>"
       ;;
+    migrate-storage)
+      cat <<'HELP'
+Usage: runpool migrate-storage [options]
+
+Copy a stopped legacy installation into Application Support and Caches, then
+rewrite runner work folders and launch agents. The legacy tree is retained
+until it is explicitly removed after verification.
+
+Options:
+  --dry-run                     Print the migration plan without changing files
+  --from <path>                 Read a legacy installation from a different path
+  --to <path>                   Write the migrated installation to a different path
+  --remove-legacy               Remove the source tree after a verified migration
+HELP
+      ;;
     *)
       _rp_err "unknown command: ${command}"
       return 2
@@ -176,9 +195,10 @@ case "${cmd}" in
   autoscale)      _rp_autoscale ;;
   sweep)          _rp_sweep ;;
   clean)          _rp_clean "$@" ;;
-  pause)          _rp_pause ;;
-  resume)         _rp_resume ;;
+  pause)          _rp_pause "$@" ;;
+  resume)         _rp_resume "$@" ;;
   schedule)       _rp_schedule "$@" ;;
+  migrate-storage) _rp_migrate_storage "$@" ;;
   rewrite-agents) _rp_rewrite_plists ;;
   help)           _rp_help "${1:-}" ;;
   -h|--help|"")  _rp_help ;;
