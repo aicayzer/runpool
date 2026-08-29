@@ -423,6 +423,24 @@ _rp_migrate_move_cache_dir() {
   mv "${from}" "${to}"
 }
 
+_rp_migrate_rewrite_runner_links() {
+  local runner_dir="$1" name link target target_name
+  for name in bin externals; do
+    link="${runner_dir}/${name}"
+    [ -L "${link}" ] || continue
+    target=$(readlink "${link}") || return 1
+    target_name="${target##*/}"
+    [ -n "${target_name}" ] && [ -d "${runner_dir}/${target_name}" ] || {
+      _rp_err "migration copied an unresolved runner link: ${link} -> ${target}"
+      return 1
+    }
+    # GitHub's runner updater creates absolute links to its versioned bin and
+    # externals directories. Make the copied installation self-contained so
+    # removing the legacy tree cannot break Runner.Listener afterwards.
+    ln -sfn "${target_name}" "${link}" || return 1
+  done
+}
+
 _rp_migrate_storage() {
   local dry=0 remove_legacy=0 source="" target="" active_base="${RUNPOOL_BASE}" arg p conf old_dir new_dir cache_pool i runner_dir cache_dir busy=0
   while [ $# -gt 0 ]; do
@@ -514,7 +532,7 @@ _rp_migrate_storage() {
   done
 
   mkdir -p "${target}/pools" "${target}/runners" "${target}/agents" "${target}/state" \
-           "${target}/state/pools" "${target}/hooks" "${target}/telemetry" \
+           "${target}/state/pools" "${target}/telemetry" \
            "${RUNPOOL_CACHE_DIR}/downloads" || return 1
   for p in $(_rp_migrate_pool_names "${source}"); do
     conf="${source}/pools/${p}.conf"
@@ -531,6 +549,7 @@ _rp_migrate_storage() {
     while [ "${i}" -le "${POOL_COUNT}" ]; do
       runner_dir="${new_dir}/runner-${i}"
       cache_dir="${cache_pool}/runner-${i}"
+      _rp_migrate_rewrite_runner_links "${runner_dir}" || return 1
       mkdir -p "${cache_dir}" || return 1
       _rp_migrate_move_cache_dir "${runner_dir}/_work" "${cache_dir}/work" || return 1
       _rp_migrate_move_cache_dir "${runner_dir}/.pnpm-store" "${cache_dir}/pnpm" || return 1
@@ -546,7 +565,7 @@ _rp_migrate_storage() {
     done
     _rp_migrate_update_pool_conf "${target}/pools/${p}.conf" "${new_dir}" "${cache_pool}" || return 1
   done
-  for arg in agents state hooks telemetry; do
+  for arg in agents state telemetry; do
     if [ -d "${source}/${arg}" ]; then
       cp -R "${source}/${arg}/." "${target}/${arg}/" || return 1
     fi
@@ -584,6 +603,7 @@ _rp_up() {
   if _rp_paused; then _rp_err "runpool is paused — run 'runpool resume' first"; return 1; fi
   if _rp_pool_paused "$1"; then _rp_err "pool '$1' is paused — run 'runpool resume $1' first"; return 1; fi
   local i label plist loaded=0
+  [ -z "${RUNPOOL_JOB_HOOK:-}" ] || _rp_write_hook_wrappers || return 1
   i=1
   while [ "${i}" -le "${POOL_COUNT}" ]; do
     label="$(_rp_label "$1" "${i}")"
