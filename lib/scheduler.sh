@@ -125,9 +125,8 @@ _rp_status_json() {
   local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" pool_paused="false" wr wfirst
   _rp_paused && paused="true"
   # Machine state belongs here rather than being recomputed by every caller.
-  # The contention threshold in particular is configurable, so a caller that
-  # derived it from core count would quietly disagree with the tool that acts
-  # on it.
+  # The load threshold is configurable, so a status consumer that derived it
+  # from core count would quietly disagree with other status consumers.
   local load cores
   load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
   cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 0)
@@ -272,7 +271,7 @@ _rp_doctor() {
   tick="${RUNPOOL_LABEL_NS}.tick"
   clean="${RUNPOOL_LABEL_NS}.clean"
   if _rp_agent_loaded "${tick}"; then
-    _rp_doctor_ok "the tick agent is loaded: autoscale, idle standdown, contention and health"
+    _rp_doctor_ok "the tick agent is loaded: autoscale, idle standdown and health"
   elif [ -f "${HOME}/Library/LaunchAgents/${tick}.plist" ]; then
     _rp_doctor_fail "the tick agent is installed but not loaded, so nothing autoscales: a queued job waits for a manual 'runpool up' and every pool still reports as healthy" \
                     "fix: runpool schedule install   (rewrites and reloads it)"
@@ -742,7 +741,7 @@ _rp_tick() {
     mkdir "${RUNPOOL_TICK_LOCK}" 2>/dev/null || return 0
   fi
   trap 'rm -rf "${RUNPOOL_TICK_LOCK}"' EXIT INT TERM
-  _rp_autoscale; _rp_sweep; _rp_load_check; _rp_health_check; _rp_clean_if_overdue
+  _rp_autoscale; _rp_sweep; _rp_health_check; _rp_clean_if_overdue
   rm -rf "${RUNPOOL_TICK_LOCK}"
   trap - EXIT INT TERM
 }
@@ -823,7 +822,7 @@ _rp_schedule_install() {
   launchctl load   "${HOME}/Library/LaunchAgents/${tick}.plist"
   launchctl unload "${HOME}/Library/LaunchAgents/${clean}.plist" 2>/dev/null
   launchctl load   "${HOME}/Library/LaunchAgents/${clean}.plist"
-  _rp_log "scheduler installed: tick 60s (autoscale, idle-down, contention), clean daily 04:00"
+  _rp_log "scheduler installed: tick 60s (autoscale, idle-down, health), clean daily 04:00"
 }
 
 _rp_schedule_remove() {

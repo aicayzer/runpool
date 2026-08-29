@@ -151,12 +151,12 @@ Start and stop pools, change runner counts, disable local CI and see what is run
 RunPool detects. It does not deliver. Set `RUNPOOL_NOTIFY_CMD` to any command reading one JSON object on stdin:
 
 ```json
-{ "severity": "warning", "title": "CI contention on my-mac: load 163, 5 jobs", "key": "runpool/contention/my-mac" }
+{ "severity": "critical", "title": "Pool 'main' is not registered with GitHub", "key": "runpool/unregistered/main" }
 ```
 
 Unset, it reports nothing and works as well. `contrib/notify-webhook.sh` is a reference implementation and shows the full shape.
 
-**Two things are reported**, both about the pool's own health: a machine too contended to trust a result, and runners that are up but unreachable. Failed workflow runs deliberately are not, because watching CI results should not depend on this laptop being awake.
+**Only pool connectivity failures are reported**: a missing GitHub registration, or runners that are running locally but unreachable from GitHub. Machine load remains visible in job logs and structured status but is diagnostic context, not an alert. Failed workflow runs deliberately are not reported, because watching CI results should not depend on this laptop being awake.
 
 ## Things worth knowing
 
@@ -164,7 +164,7 @@ Unset, it reports nothing and works as well. `contrib/notify-webhook.sh` is a re
 - **For an organisation, that control is GitHub's, not RunPool's.** A runner group carries `allows_public_repositories`, it is `false` by default, and runners land in the default group, so public repos in the org do not get them. RunPool reads that setting when you register and warns only if it has been turned on. [SECURITY.md](SECURITY.md) covers the whole picture, including what RunPool deliberately does not do.
 - **A runner can look healthy while GitHub has dropped it.** GitHub prunes registrations that have not connected for a long time. The local install still starts and connects and then picks up nothing, so jobs queue forever against a pool reporting as running. That is what the `github` column in `status` is for, and `reregister` fixes it.
 - **`services:` and `container:` do not force a hosted runner.** Those two workflow keys are Linux-only, but an ordinary `docker run` inside a step works anywhere Docker does, including here.
-- **More runners is not obviously more throughput**, and the contention warning scales with pool size: it defaults to six times core count, while a busy pool of N runners reaches roughly N times core count on its own. `runpool stats` describes what jobs cost and `runpool stats --queue` adds the wait before each one started, which is the figure that moves when capacity changes. Read it with the qualifier it prints: a wait can be a cold pool waking or a dependency that has not finished, and neither is fixed by more runners. `contrib/telemetry-join.sh` gives you the raw rows to separate them.
+- **More runners is not obviously more throughput.** `runpool stats` describes what jobs cost and `runpool stats --queue` adds the wait before each one started, which is the figure that moves when capacity changes. Read it with the qualifier it prints: a wait can be a cold pool waking or a dependency that has not finished, and neither is fixed by more runners. `contrib/telemetry-join.sh` gives you the raw rows to separate them.
 
 ## Not on a Mac?
 
