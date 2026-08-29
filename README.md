@@ -113,7 +113,7 @@ The file holds no credentials and nothing machine-specific, so **a second machin
 
 ## Storage and migration
 
-**Required state lives in `~/Library/Application Support/runpool`.** That includes runner installations and credentials, pool definitions, pause state, generated launch agents and telemetry. **Regenerable data lives in `~/Library/Caches/runpool`**: job work trees, checked-out repositories, downloaded actions and tools, package stores, temp directories and runner downloads. Logs remain in `~/Library/Logs/runpool`; the config and pools file remain under `~/.config/runpool`.
+**Required state lives in `~/Library/Application Support/runpool`.** That includes runner installations and credentials, pool definitions, pause state, generated launch agents and telemetry. **Regenerable data lives in `~/Library/Caches/runpool`**: job work trees, checked-out repositories, downloaded actions and tools, package stores, temp directories and runner downloads. Logs remain in `~/Library/Logs/runpool`; the config, pools file and generated job-hook launchers remain under `~/.config/runpool`. The launchers deliberately stay there because GitHub's runner requires an absolute hook path but does not quote Bash hook paths containing whitespace.
 
 `RUNPOOL_BASE`, `RUNPOOL_CACHE_DIR` and `RUNPOOL_LOG_DIR` can override those roots, with the usual precedence: environment, config file, then default. Existing `RUNPOOL_BASE` installations remain active until migrated, so upgrading never silently strands registrations.
 

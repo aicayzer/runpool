@@ -532,7 +532,7 @@ _rp_migrate_storage() {
   done
 
   mkdir -p "${target}/pools" "${target}/runners" "${target}/agents" "${target}/state" \
-           "${target}/state/pools" "${target}/hooks" "${target}/telemetry" \
+           "${target}/state/pools" "${target}/telemetry" \
            "${RUNPOOL_CACHE_DIR}/downloads" || return 1
   for p in $(_rp_migrate_pool_names "${source}"); do
     conf="${source}/pools/${p}.conf"
@@ -565,7 +565,7 @@ _rp_migrate_storage() {
     done
     _rp_migrate_update_pool_conf "${target}/pools/${p}.conf" "${new_dir}" "${cache_pool}" || return 1
   done
-  for arg in agents state hooks telemetry; do
+  for arg in agents state telemetry; do
     if [ -d "${source}/${arg}" ]; then
       cp -R "${source}/${arg}/." "${target}/${arg}/" || return 1
     fi
@@ -603,6 +603,7 @@ _rp_up() {
   if _rp_paused; then _rp_err "runpool is paused — run 'runpool resume' first"; return 1; fi
   if _rp_pool_paused "$1"; then _rp_err "pool '$1' is paused — run 'runpool resume $1' first"; return 1; fi
   local i label plist loaded=0
+  [ -z "${RUNPOOL_JOB_HOOK:-}" ] || _rp_write_hook_wrappers || return 1
   i=1
   while [ "${i}" -le "${POOL_COUNT}" ]; do
     label="$(_rp_label "$1" "${i}")"

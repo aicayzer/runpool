@@ -159,7 +159,7 @@ The JSON carries each pool's watched repositories and the paths to its logs, so 
 
 ## Storage migration
 
-New installations keep runner credentials, pool definitions and pause state in `~/Library/Application Support/runpool`, with work trees and per-runner caches in `~/Library/Caches/runpool`. Existing `RUNPOOL_BASE` installations remain active until explicitly migrated.
+New installations keep runner credentials, pool definitions and pause state in `~/Library/Application Support/runpool`, with work trees and per-runner caches in `~/Library/Caches/runpool`. Generated job-hook launchers stay under `~/.config/runpool`, whose path is safe for the runner's unquoted Bash hook invocation. Existing `RUNPOOL_BASE` installations remain active until explicitly migrated.
 
 ```bash
 runpool migrate-storage --dry-run

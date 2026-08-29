@@ -10,6 +10,8 @@ support_dir="${scratch_dir}/Application Support/runpool"
 cache_dir="${scratch_dir}/Caches/runpool"
 config_dir="${scratch_dir}/config"
 log_dir="${scratch_dir}/logs"
+hook_dir="${config_dir}/runpool/hooks"
+job_hook="${scratch_dir}/job-hook.sh"
 
 cleanup() { rm -rf "${scratch_dir}"; }
 trap cleanup EXIT INT TERM
@@ -32,6 +34,8 @@ touch "${legacy_dir}/alpha/runner-1/bin.2.336.0/Runner.Listener" \
       "${legacy_dir}/alpha/runner-1/externals.2.336.0/node"
 ln -s "${legacy_dir}/alpha/runner-1/bin.2.336.0" "${legacy_dir}/alpha/runner-1/bin"
 ln -s "${legacy_dir}/alpha/runner-1/externals.2.336.0" "${legacy_dir}/alpha/runner-1/externals"
+printf '#!/bin/sh\nexit 0\n' >| "${job_hook}"
+chmod +x "${job_hook}"
 
 cat >| "${legacy_dir}/pools/alpha.conf" <<CONF
 POOL_NAME="alpha"
@@ -41,7 +45,11 @@ POOL_COUNT="1"
 POOL_DIR="${legacy_dir}/alpha"
 POOL_LABELS="self-hosted,macOS,ARM64,alpha"
 CONF
-printf 'RUNPOOL_BASE="%s"\n' "${legacy_dir}" >| "${config_dir}/runpool.conf"
+cat >| "${config_dir}/runpool.conf" <<CONF
+RUNPOOL_BASE="${legacy_dir}"
+RUNPOOL_JOB_HOOK="${job_hook}"
+RUNPOOL_HOOK_DIR="${hook_dir}"
+CONF
 chmod 600 "${config_dir}/runpool.conf"
 cat >| "${legacy_dir}/alpha/runner-1/.runner" <<RUNNER
 {"agentId":1,"workFolder":"_work"}
@@ -82,6 +90,28 @@ assert_file "${cache_dir}/pools/alpha/runner-1/npm/file"
 assert_file "${cache_dir}/pools/alpha/runner-1/tmp/file"
 assert_file "${support_dir}/agents/runpool.alpha.1.plist"
 assert_contains "${support_dir}/agents/runpool.alpha.1.plist" "${cache_dir}/pools/alpha/runner-1/pnpm"
+assert_contains "${support_dir}/agents/runpool.alpha.1.plist" "${hook_dir}/started.sh"
+assert_contains "${support_dir}/agents/runpool.alpha.1.plist" "${hook_dir}/completed.sh"
+assert_file "${hook_dir}/started.sh"
+assert_file "${hook_dir}/completed.sh"
+[ -x "${hook_dir}/started.sh" ] || fail "started hook launcher is not executable"
+[ -x "${hook_dir}/completed.sh" ] || fail "completed hook launcher is not executable"
+[ ! -d "${support_dir}/hooks" ] || fail "obsolete hook directory copied into Application Support"
+
+rm "${hook_dir}/started.sh"
+env RUNPOOL_CACHE_DIR="${cache_dir}" RUNPOOL_CONFIG="${config_dir}/runpool.conf" RUNPOOL_POOLS_FILE="${config_dir}/pools" \
+    RUNPOOL_LOG_DIR="${log_dir}" RUNPOOL_LOG="${log_dir}/runpool.log" \
+    "${repo_dir}/bin/runpool" rewrite-agents >/dev/null || fail "agent rewrite failed to restore hook launcher"
+assert_file "${hook_dir}/started.sh"
+
+invalid_output="${scratch_dir}/invalid-hook-dir.txt"
+if env RUNPOOL_HOOK_DIR="${scratch_dir}/hook dir" RUNPOOL_CACHE_DIR="${cache_dir}" \
+       RUNPOOL_CONFIG="${config_dir}/runpool.conf" RUNPOOL_POOLS_FILE="${config_dir}/pools" \
+       RUNPOOL_LOG_DIR="${log_dir}" RUNPOOL_LOG="${log_dir}/runpool.log" \
+       "${repo_dir}/bin/runpool" rewrite-agents >| "${invalid_output}" 2>&1; then
+  fail "agent rewrite accepted a hook launcher path containing whitespace"
+fi
+assert_contains "${invalid_output}" "RUNPOOL_HOOK_DIR cannot contain whitespace"
 
 status_file="${scratch_dir}/status.json"
 env RUNPOOL_CACHE_DIR="${cache_dir}" RUNPOOL_CONFIG="${config_dir}/runpool.conf" RUNPOOL_POOLS_FILE="${config_dir}/pools" \

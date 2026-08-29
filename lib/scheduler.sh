@@ -222,7 +222,7 @@ _rp_doctor() {
   [ $# -eq 0 ] || { _rp_err "doctor takes no arguments (usage: runpool doctor)"; return 1; }
 
   local gh_ok=1 pools=0 seen_orgs="" p running gh reg online
-  local tick clean i missing avail_kb cache_avail_kb free mode other
+  local tick clean i missing avail_kb cache_avail_kb free mode other phase hook_fails
 
   _rp_doctor_fails=0
   _rp_doctor_warns=0
@@ -285,6 +285,36 @@ _rp_doctor() {
   else
     _rp_doctor_warn "the clean agent is not loaded, so work directories, diagnostics and superseded runner binaries accrue with nothing collecting them" \
                     "fix: runpool schedule install, or 'runpool clean' by hand"
+  fi
+
+  # --- job hooks ---------------------------------------------------------
+  echo ""
+  echo "job hooks"
+  if [ -z "${RUNPOOL_JOB_HOOK:-}" ]; then
+    _rp_doctor_note "no job hook is configured"
+  else
+    hook_fails="${_rp_doctor_fails}"
+    case "${RUNPOOL_HOOK_DIR}" in
+      /*) ;;
+      *) _rp_doctor_fail "the hook launcher directory is not absolute: ${RUNPOOL_HOOK_DIR}" \
+                         "fix: set RUNPOOL_HOOK_DIR to an absolute path without whitespace, then runpool rewrite-agents" ;;
+    esac
+    case "${RUNPOOL_HOOK_DIR}" in
+      *[[:space:]]*)
+        _rp_doctor_fail "the hook launcher directory contains whitespace, which the GitHub Actions runner does not quote: ${RUNPOOL_HOOK_DIR}" \
+                        "fix: remove RUNPOOL_HOOK_DIR from the config to use the safe default, then runpool rewrite-agents"
+        ;;
+    esac
+    if [ ! -x "${RUNPOOL_JOB_HOOK}" ]; then
+      _rp_doctor_fail "the configured job hook is not executable: ${RUNPOOL_JOB_HOOK}" \
+                      "fix: correct RUNPOOL_JOB_HOOK or make it executable, then runpool rewrite-agents"
+    fi
+    for phase in started completed; do
+      [ -x "${RUNPOOL_HOOK_DIR}/${phase}.sh" ] || _rp_doctor_fail \
+        "the ${phase} job-hook launcher is missing or not executable: ${RUNPOOL_HOOK_DIR}/${phase}.sh" \
+        "fix: runpool rewrite-agents"
+    done
+    [ "${_rp_doctor_fails}" = "${hook_fails}" ] && _rp_doctor_ok "job-hook launchers are executable at a runner-safe path"
   fi
 
   # --- pools --------------------------------------------------------------

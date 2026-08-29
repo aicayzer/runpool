@@ -26,6 +26,7 @@ _rp_env_IDLE_SECS="${RUNPOOL_IDLE_SECS:-}"
 _rp_env_LOAD_WARN="${RUNPOOL_LOAD_WARN:-}"
 _rp_env_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 _rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
+_rp_env_HOOK_DIR="${RUNPOOL_HOOK_DIR:-}"
 _rp_env_TELEMETRY="${RUNPOOL_TELEMETRY:-}"
 
 # 'set -a' exports everything the config assigns, which matters because a
@@ -47,15 +48,16 @@ set +a
 [ -n "${_rp_env_LOAD_WARN}" ]   && RUNPOOL_LOAD_WARN="${_rp_env_LOAD_WARN}"
 [ -n "${_rp_env_NOTIFY_CMD}" ]  && RUNPOOL_NOTIFY_CMD="${_rp_env_NOTIFY_CMD}"
 [ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
+[ -n "${_rp_env_HOOK_DIR}" ]    && RUNPOOL_HOOK_DIR="${_rp_env_HOOK_DIR}"
 [ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
 unset _rp_env_BASE _rp_env_CACHE_DIR _rp_env_POOLS_FILE _rp_env_LOG_DIR _rp_env_LABEL_NS \
       _rp_env_IDLE_SECS _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
-      _rp_env_TELEMETRY
+      _rp_env_HOOK_DIR _rp_env_TELEMETRY
 
 # Restored values need exporting again: the restore above is a plain assignment
 # and happens after 'set -a' was turned off.
 export RUNPOOL_BASE RUNPOOL_CACHE_DIR RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
-       RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_TELEMETRY \
+       RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_HOOK_DIR RUNPOOL_TELEMETRY \
        RUNPOOL_CONFIG RUNPOOL_POOLS_FILE
 
 # Required state belongs in Application Support. Runner installations carry
@@ -91,6 +93,13 @@ RUNPOOL_RUNNER_DIR="${RUNPOOL_BASE}/runners"
 RUNPOOL_AGENT_DIR="${RUNPOOL_BASE}/agents"
 RUNPOOL_STATE_DIR="${RUNPOOL_BASE}/state"
 RUNPOOL_LOG_DIR="${RUNPOOL_LOG_DIR:-${HOME}/Library/Logs/runpool}"
+
+# GitHub's runner passes a Bash hook path without quoting it, so a wrapper
+# below "Application Support" fails before the workflow starts. These tiny
+# launchers are durable configuration, not cache data: Caches can be evicted
+# while a listener is online. Keep them beside the operator-owned config and
+# validate the runner's stricter path contract before writing an agent.
+RUNPOOL_HOOK_DIR="${RUNPOOL_HOOK_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/runpool/hooks}"
 
 RUNPOOL_LOG="${RUNPOOL_LOG_DIR}/runpool.log"
 RUNPOOL_ACTIVITY="${RUNPOOL_STATE_DIR}/activity"
@@ -428,15 +437,37 @@ _rp_deregister_runner() {
 # is installation-specific.
 _rp_write_hook_wrappers() {
   [ -n "${RUNPOOL_JOB_HOOK:-}" ] || return 0
-  local dir="${RUNPOOL_BASE}/hooks" phase
-  mkdir -p "${dir}" 2>/dev/null
+  local dir="${RUNPOOL_HOOK_DIR}" phase old_dir="${RUNPOOL_BASE}/hooks"
+  case "${RUNPOOL_JOB_HOOK}" in
+    /*) ;;
+    *) _rp_err "RUNPOOL_JOB_HOOK must be an absolute path: ${RUNPOOL_JOB_HOOK}"; return 1 ;;
+  esac
+  [ -x "${RUNPOOL_JOB_HOOK}" ] || {
+    _rp_err "RUNPOOL_JOB_HOOK is not executable: ${RUNPOOL_JOB_HOOK}"
+    return 1
+  }
+  case "${dir}" in
+    /*) ;;
+    *) _rp_err "RUNPOOL_HOOK_DIR must be an absolute path: ${dir}"; return 1 ;;
+  esac
+  case "${dir}" in
+    *[[:space:]]*)
+      _rp_err "RUNPOOL_HOOK_DIR cannot contain whitespace because the GitHub Actions runner does not quote Bash hook paths: ${dir}"
+      return 1
+      ;;
+  esac
+  mkdir -p "${dir}" 2>/dev/null || { _rp_err "could not create hook directory: ${dir}"; return 1; }
   for phase in started completed; do
     cat >| "${dir}/${phase}.sh" <<WRAP
 #!/bin/sh
 exec "${RUNPOOL_JOB_HOOK}" ${phase}
 WRAP
-    chmod +x "${dir}/${phase}.sh" 2>/dev/null
+    chmod +x "${dir}/${phase}.sh" 2>/dev/null || return 1
   done
+  if [ "${old_dir}" != "${dir}" ]; then
+    rm -f "${old_dir}/started.sh" "${old_dir}/completed.sh" 2>/dev/null || true
+    rmdir "${old_dir}" 2>/dev/null || true
+  fi
 }
 
 # Write the on-demand launch agent for one runner. $1 label, $2 runner_dir.
@@ -455,7 +486,10 @@ _rp_write_plist() {
     npm_dir="${cache_dir}/npm"
     tmp_dir="${cache_dir}/tmp"
   fi
-  [ -n "${RUNPOOL_JOB_HOOK:-}" ] && { _rp_write_hook_wrappers; hook="${RUNPOOL_BASE}/hooks"; }
+  if [ -n "${RUNPOOL_JOB_HOOK:-}" ]; then
+    _rp_write_hook_wrappers || return 1
+    hook="${RUNPOOL_HOOK_DIR}"
+  fi
   {
     cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -533,7 +567,7 @@ _rp_rewrite_plists() {
     while [ "${i}" -le "${POOL_COUNT}" ]; do
       _rp_prepare_runner_cache "${p}" "${i}"
       _rp_write_plist "$(_rp_label "${p}" "${i}")" "${POOL_DIR}/runner-${i}" \
-                      "$(_rp_runner_cache_dir "${p}" "${i}")" "${POOL_LEGACY_LAYOUT}"
+                      "$(_rp_runner_cache_dir "${p}" "${i}")" "${POOL_LEGACY_LAYOUT}" || return 1
       i=$(( i + 1 ))
     done
     _rp_log "rewrote agents for pool '${p}'"
