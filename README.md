@@ -126,7 +126,7 @@ runpool status --local
 runpool doctor
 ```
 
-Migration refuses while a job is running, stops only idle runners, copies runner state into Application Support, moves regenerable per-runner data into Caches, rewrites each runner's absolute work folder and regenerates launch agents. It retains the legacy tree until you have verified the new installation. Remove it only afterwards. For a custom legacy `RUNPOOL_BASE`, use the exact `--from` and `--to` command printed by migration:
+Migration refuses while a job is running, stops only idle runners, copies runner state into Application Support, moves reusable package stores into Caches, starts work and temp directories empty, rewrites each runner's absolute work folder and regenerates launch agents. Work output is discarded because compilers can embed its former absolute path; the untouched legacy tree remains available until you have verified the new installation. Remove it only afterwards. For a custom legacy `RUNPOOL_BASE`, use the exact `--from` and `--to` command printed by migration:
 
 ```bash
 runpool migrate-storage --remove-legacy
