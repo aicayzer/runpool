@@ -551,14 +551,18 @@ _rp_migrate_storage() {
       cache_dir="${cache_pool}/runner-${i}"
       _rp_migrate_rewrite_runner_links "${runner_dir}" || return 1
       mkdir -p "${cache_dir}" || return 1
-      _rp_migrate_move_cache_dir "${runner_dir}/_work" "${cache_dir}/work" || return 1
+      # A work tree is regenerable but not necessarily portable. Compilers can
+      # bake its absolute path into build artifacts, and a remote cache can
+      # later restore those artifacts after this local copy is gone. Start the
+      # migrated runner cold instead of presenting moved output as valid.
+      if [ -d "${runner_dir}/_work" ]; then
+        rm -rf "${runner_dir}/_work" || return 1
+      fi
       _rp_migrate_move_cache_dir "${runner_dir}/.pnpm-store" "${cache_dir}/pnpm" || return 1
       _rp_migrate_move_cache_dir "${runner_dir}/.npm-cache" "${cache_dir}/npm" || return 1
-      if [ -d "${runner_dir}/tmp" ]; then
-        _rp_migrate_move_cache_dir "${runner_dir}/tmp" "${cache_dir}/tmp" || return 1
-      elif [ -d "${runner_dir}/.tmp" ]; then
-        _rp_migrate_move_cache_dir "${runner_dir}/.tmp" "${cache_dir}/tmp" || return 1
-      fi
+      # Job temp belongs to the old workspace in the same way. Nothing in it
+      # is durable runner state, so carrying it across creates risk for no gain.
+      rm -rf "${runner_dir}/tmp" "${runner_dir}/.tmp" || return 1
       mkdir -p "${cache_dir}/work" "${cache_dir}/pnpm" "${cache_dir}/npm" "${cache_dir}/tmp" || return 1
       _rp_migrate_update_work_folder "${runner_dir}" "${cache_dir}/work" || return 1
       i=$(( i + 1 ))

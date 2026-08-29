@@ -168,7 +168,7 @@ runpool status --local
 runpool doctor
 ```
 
-**Do not run migration while a job is active.** RunPool refuses it, preserving registrations and the legacy tree. The old tree is retained after migration; remove it only after verification with `runpool migrate-storage --remove-legacy`. For a custom legacy `RUNPOOL_BASE`, use the exact `--from` and `--to` command printed by migration.
+**Do not run migration while a job is active.** RunPool refuses it, preserving registrations and the legacy tree. Migrated work and temp directories start empty because build products can embed their former absolute path; reusable package stores move across. The old tree is retained after migration; remove it only after verification with `runpool migrate-storage --remove-legacy`. For a custom legacy `RUNPOOL_BASE`, use the exact `--from` and `--to` command printed by migration.
 
 ## Capacity
 
