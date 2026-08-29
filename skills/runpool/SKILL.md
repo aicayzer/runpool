@@ -227,7 +227,7 @@ Persistent runners never clean up after themselves. `runpool clean` prunes work 
 
 RunPool ships with **no notifier** and works fully without one. Set `RUNPOOL_NOTIFY_CMD` to a command reading one JSON object on stdin; `contrib/notify-webhook.sh` is a reference implementation.
 
-**Do not add notification logic to runpool.** It reports two conditions, both about the pool's own health: contention, and runners that are up but unreachable. Watching workflow *results* belongs to whatever receives the notifications, because that should not depend on the laptop being awake.
+**Do not add notification logic to runpool.** It reports only pool connectivity failures: a missing GitHub registration, or runners that are up locally but unreachable. Machine load stays in job logs and structured status as diagnostic context. Watching workflow *results* belongs to whatever receives the notifications, because that should not depend on the laptop being awake.
 
 ## Things that will bite
 

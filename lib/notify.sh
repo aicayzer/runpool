@@ -14,9 +14,10 @@
 #
 # Failed workflow runs. Watching CI *results* is observability and belongs to
 # whatever receives these alerts, which can poll GitHub directly and does not
-# need a laptop to be awake to do it. runpool reports only on the health of the
-# pool itself: the machine being too contended to trust a result, and runners
-# that are running but not reachable. Those two are nobody else's to notice.
+# need a laptop to be awake to do it. runpool reports only runners that are
+# registered incorrectly or running but not reachable. That condition belongs
+# to the pool and otherwise leaves jobs queued against capacity that looks
+# healthy locally.
 #
 # Nothing watches runpool itself, and that is an accepted gap rather than an
 # oversight. A dead poller on a laptop cannot be polled from outside, and a
@@ -24,7 +25,6 @@
 # surfaces within a day. This is a CI helper, not a production pager, and the
 # point of the exercise was fewer alerts rather than a monitor for the monitor.
 
-RUNPOOL_LOAD_STATE="${RUNPOOL_STATE_DIR}/load-warned"
 RUNPOOL_HEALTH_STATE="${RUNPOOL_STATE_DIR}/health-checked"
 
 # Minimal JSON string escaping: backslash and double quote, then strip control
@@ -55,34 +55,6 @@ _rp_notify() {
     _rp_err "notifier failed: ${title}"
     return 1
   fi
-}
-
-# ---------------------------------------------------------------------------
-# Contention
-# ---------------------------------------------------------------------------
-# Several branches pushed at once turn one machine into a queue, and
-# timing-sensitive tests start failing for reasons that have nothing to do with
-# the code. That happened repeatedly at load 163 and 184 and cost real time,
-# because a contended failure and a genuine defect look identical in a log.
-# This makes them distinguishable.
-_rp_load_check() {
-  local busy=0 p load now warned
-  for p in $(_rp_pool_names); do
-    _rp_load_pool "${p}" || continue
-    busy=$(( busy + $(_rp_busy_in "${POOL_DIR}") ))
-  done
-  [ "${busy}" = "0" ] && { rm -f "${RUNPOOL_LOAD_STATE}"; return 0; }
-  load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print int($2)}')
-  [ "${load:-0}" -lt "${RUNPOOL_LOAD_WARN}" ] && return 0
-  # One notification per contention episode, not one per tick.
-  now=$(_rp_now); warned=$(cat "${RUNPOOL_LOAD_STATE}" 2>/dev/null || echo 0)
-  [ $(( now - warned )) -lt 3600 ] && return 0
-  echo "${now}" >| "${RUNPOOL_LOAD_STATE}"
-  _rp_notify warning \
-    "CI contention on $(hostname -s): load ${load}, ${busy} jobs" \
-    "runpool/contention/$(hostname -s)" \
-    "The runner pool is heavily contended. A timing-sensitive test failing right now is more likely to be the machine than a defect, so check the load before treating a red run as real." \
-    "\"Load average\":\"${load}\",\"Jobs running\":\"${busy}\",\"Threshold\":\"${RUNPOOL_LOAD_WARN}\",\"Host\":\"$(hostname -s)\""
 }
 
 # ---------------------------------------------------------------------------

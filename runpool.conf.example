@@ -37,11 +37,11 @@
 # grace only avoids churn between rapid pushes in one working session.
 # RUNPOOL_IDLE_SECS=1200
 
-# Warn above this 1-minute load average while jobs are running.
+# Load threshold exposed in structured status. It does not send an alert.
 # Defaults to six times core count, which sits clear of ordinary work.
 # Raise this as the pool grows: a busy pool of N runners reaches about N times
-# core count on its own, so the default of six times core count starts alerting
-# on healthy work once a pool passes six runners.
+# core count on its own, so the default may stop distinguishing exceptional
+# contention once a pool passes six runners.
 # RUNPOOL_LOAD_WARN=84
 
 # Stamp machine state into every job, so a contended failure and a real defect
