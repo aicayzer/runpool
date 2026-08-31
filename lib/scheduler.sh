@@ -222,6 +222,7 @@ _rp_doctor() {
 
   local gh_ok=1 pools=0 seen_orgs="" p running gh reg online
   local tick clean i missing avail_kb cache_avail_kb free mode other phase hook_fails
+  local all_repos unwatched
 
   _rp_doctor_fails=0
   _rp_doctor_warns=0
@@ -355,6 +356,38 @@ _rp_doctor() {
     [ "${POOL_SCOPE}" = "org" ] && [ -z "${POOL_WATCH:-}" ] && _rp_doctor_fail \
       "${p}: an org pool with no watched repositories never autoscales, because github reports queued runs per repository rather than per organisation" \
       "fix: give it --watch OWNER/REPO,... in ~/.config/runpool/pools and 'runpool apply'"
+
+    # The same defect short of its limit: a watch list that is not empty and
+    # is no longer complete. The empty case above is caught locally; this one
+    # needs to know what the organisation holds, so it reports rather than
+    # fails and it names what it found rather than guessing intent.
+    #
+    # **It does not decide which repositories should be watched.** A
+    # repository at this scope may legitimately route every job to a managed
+    # runner, and nothing readable here distinguishes that from one that
+    # meant to reach the pool — the routing lives in a repository variable
+    # whose name is a convention of whoever set it up, not of RunPool. So
+    # the operator is told the difference and judges it.
+    #
+    # Reported here rather than polled at tick time on purpose. Waking on
+    # any queued run in the organisation would also wake for a public
+    # repository's, which the runner group refuses to serve, so the pool
+    # would come up for work it can never take and idle straight back down.
+    # Avoiding that needs the visibility of each repository, and re-deriving
+    # the public-repository answer is the one thing AGENTS.md says not to do.
+    if [ "${gh_ok}" = "1" ] && [ "${POOL_SCOPE}" = "org" ] && [ -n "${POOL_WATCH:-}" ]; then
+      all_repos=$(gh api "/orgs/${POOL_TARGET}/repos?per_page=100" --paginate --jq '.[].full_name' 2>/dev/null)
+      if [ -z "${all_repos}" ]; then
+        _rp_doctor_note "${p}: could not list ${POOL_TARGET}'s repositories, so the watch list was not checked for staleness"
+      else
+        unwatched=$(_rp_unwatched_repos "${POOL_WATCH}" "${all_repos}")
+        if [ -n "${unwatched}" ]; then
+          _rp_doctor_note "${p}: watching $(echo "${POOL_WATCH}" | tr ',' '\n' | grep -c .) of $(printf '%s\n' "${all_repos}" | grep -c .) repositories at ${POOL_TARGET}. A job queued by an unwatched one waits until a watched one happens to wake the pool: $(printf '%s' "${unwatched}" | tr '\n' ' ')"
+        else
+          _rp_doctor_ok "${p}: every repository at ${POOL_TARGET} is watched"
+        fi
+      fi
+    fi
 
     if [ "${gh_ok}" = "0" ]; then
       _rp_doctor_note "${p}: ${POOL_SCOPE} ${POOL_TARGET}, ${running}/${POOL_COUNT} running locally (github not checked)"
@@ -504,6 +537,29 @@ _rp_doctor() {
 # active work this makes no API calls at all. An org pool polls the repos named
 # in POOL_WATCH, because GitHub exposes queued runs per repository rather than
 # per organisation.
+# Repositories at an org pool's scope that its watch list does not name.
+#
+# `_rp_autoscale` polls POOL_WATCH because GitHub reports queued runs per
+# repository and not per organisation, so the list IS the wake mechanism. A
+# repository missing from it queues work nothing wakes the pool for, and
+# that failure is silent in every direction: a queued job is not a failed
+# job, so no alert fires, and the pool reports healthy because it is.
+#
+# Pure, and separate from the check that reports it, so the rule can be
+# exercised without reaching GitHub. $1 is the watch list as stored, $2 is
+# the repository list newline-separated.
+_rp_unwatched_repos() {
+  local watch="$1" all="$2" r
+  watch=",$(echo "${watch}" | tr -d ' '),"
+  printf '%s\n' "${all}" | while IFS= read -r r; do
+    [ -n "${r}" ] || continue
+    case "${watch}" in
+      *",${r},"*) ;;
+      *) printf '%s\n' "${r}" ;;
+    esac
+  done
+}
+
 _rp_autoscale() {
   _rp_paused && return 0
   local p up queued q wr

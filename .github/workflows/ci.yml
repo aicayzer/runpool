@@ -40,3 +40,5 @@ jobs:
         run: tests/storage-migration.sh
       - name: set-count guards
         run: tests/set-count-guards.sh
+      - name: watch-list staleness
+        run: tests/watch-list-staleness.sh
