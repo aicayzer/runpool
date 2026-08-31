@@ -54,11 +54,12 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | Command | |
 |---|---|
 | `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--watch OWNER/REPO,...] [--allow-public]` | Create a pool and configure its runners |
-| `set-count <pool> N` | Change a pool's runner count |
+| `set-count <pool> N [--if-count M]` | Change a pool's runner count. `--if-count` refuses unless it is currently M |
 | `apply [--dry-run] [--file PATH]` | Reconcile the machine to a file describing its pools |
 | `up` / `down <pool>` | Bring a pool online, or stand it down |
 | `status [--json] [--local]` | Local state alongside what GitHub actually sees |
 | `doctor` | Why is nothing picking this up. Reports; changes nothing |
+| `version` | Print the installed version |
 | `pools` | List registered pools |
 | `reregister <pool>` | Recreate GitHub registrations, keeping the local install |
 | `remove <pool>` | Deregister and delete a pool |
@@ -67,6 +68,8 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | `pause [pool]` / `resume [pool]` | Global kill switch, or persistent per-pool pause |
 | `schedule install\|remove` | The background agents that drive everything above |
 | `migrate-storage [--dry-run]` | Move a legacy installation into macOS storage |
+
+**`set-count` is absolute, so a caller that reads a count and acts on it later needs `--if-count`.** A pool changed in between turns a growth into a shrink, and shrinking deregisters runners. `--if-count M` refuses unless the pool is still at M, and one resize per pool runs at a time, so two callers cannot interleave. Deregistering a runner that GitHub then keeps is reported as a failure rather than logged and passed over: a registration GitHub still holds for a runner that no longer exists attracts jobs that queue forever.
 
 **`status --json --local` skips the GitHub query**, reporting those fields as `null`. The root `paused` field is the global kill switch; every pool also carries its own additive `paused` field. Anything refreshing on a timer should use `--local`: one API call per pool per minute is thousands a day, and it makes a passive readout fail whenever the network does.
 

@@ -31,6 +31,11 @@ RUNPOOL_ROOT="$(dirname "${RUNPOOL_BIN_DIR}")"
 RUNPOOL_SELF="${RUNPOOL_BIN_DIR}/runpool"
 export RUNPOOL_SELF
 
+# The released version, and the only place it is written. The Homebrew formula
+# builds from a git tag, so a tag without a matching bump here ships a binary
+# that misreports itself.
+RUNPOOL_VERSION="0.9.0"
+
 # shellcheck source=lib/common.sh
 . "${RUNPOOL_ROOT}/lib/common.sh"
 # shellcheck source=lib/lifecycle.sh
@@ -98,7 +103,19 @@ Options:
 HELP
       ;;
     set-count)
-      echo "Usage: runpool set-count <pool> <n>"
+      cat <<'HELP'
+Usage: runpool set-count <pool> <n> [options]
+
+Change a pool's runner count. Growing registers new runners with GitHub;
+shrinking deregisters them, which setting the number back does not undo.
+
+Options:
+  --if-count <n>                Refuse unless the pool currently has exactly
+                                <n> runners. For a caller that read the count,
+                                asked a question, and is now acting on the
+                                answer: without it a pool changed in between
+                                can be shrunk by a command meant to grow it.
+HELP
       ;;
     apply)
       cat <<'HELP'
@@ -115,7 +132,7 @@ HELP
     up|down)
       echo "Usage: runpool ${command} <pool>"
       ;;
-    up-all|down-all|tick|autoscale|sweep|pools|doctor)
+    up-all|down-all|tick|autoscale|sweep|pools|doctor|version)
       echo "Usage: runpool ${command}"
       ;;
     pause|resume)
@@ -188,6 +205,7 @@ case "${cmd}" in
   down-all)       _rp_down_all "$@" ;;
   remove)         _rp_remove "$@" ;;
   status)         _rp_status "$@" ;;
+  version|--version|-V) echo "runpool ${RUNPOOL_VERSION}" ;;
   doctor)         _rp_doctor "$@" ;;
   pools)          _rp_pools ;;
   stats)          _rp_stats "$@" ;;
