@@ -82,7 +82,9 @@ Commands:
   pause [pool]                  Pause every pool, or one pool persistently
   resume [pool]                 Resume every pool, or one paused pool
   schedule <install|remove>     Manage the background tick and clean agents
+  rewrite-agents                Regenerate the launch agents from current settings
   migrate-storage [options]     Move a legacy installation to macOS storage
+  version                       Print the installed version
   help [command]                display help for command
 
 Run 'runpool help <command>' for command-specific options and guidance.
@@ -132,7 +134,7 @@ HELP
     up|down)
       echo "Usage: runpool ${command} <pool>"
       ;;
-    up-all|down-all|tick|autoscale|sweep|pools|doctor|version)
+    up-all|down-all|tick|autoscale|sweep|pools|doctor|version|rewrite-agents)
       echo "Usage: runpool ${command}"
       ;;
     pause|resume)
