@@ -119,6 +119,8 @@ The pattern is already established: configuration precedence was found and fixed
 5. Update the Homebrew formula in the tap repository: bump `url` to the new tag and recompute `sha256` from the release tarball.
 6. `brew audit --strict` and `brew test` against the formula before pushing it.
 
+**There is no `CHANGELOG.md`, deliberately.** The release notes on GitHub are the changelog, the README's release badge links to them, and a copy in the repo would be a second thing to forget at step 4 and a second thing to disagree with the first. Do not add one.
+
 **The formula installs `bin/` and `lib/` together under `libexec` and symlinks only the executable into `bin`.** The executable resolves its own location, following symlinks, to find `lib/` next to itself. Installing the script directly into `bin` puts `lib/` one directory too high and breaks it.
 
 ## This repository's own CI
