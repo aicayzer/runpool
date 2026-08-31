@@ -68,6 +68,7 @@ shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh insta
 
 tests/storage-migration.sh
 tests/set-count-guards.sh
+tests/watch-list-staleness.sh
 ```
 
 Without shellcheck installed, Docker gives the same result and leaves nothing behind. Skipping the check is how CI goes red unnoticed:
