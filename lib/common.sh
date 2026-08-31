@@ -409,6 +409,64 @@ _rp_fetch_runner_tarball() {
 # runners were registered under different names. The agent id is written by the
 # runner and is exact. The file carries a UTF-8 BOM, hence grep rather than jq.
 #   $1 runner_dir  $2 scope  $3 target
+# A runner registration token for $1 $2, or nothing with a non-zero status.
+#
+# `gh api --jq` prints the error body to stdout when the request fails, so
+# every caller here used to accept
+#
+#   {"message":"Not Found","documentation_url":"...","status":"404"}
+#
+# as a token, because it tested only that the value was non-empty. config.sh
+# then failed on a garbage token, deep in the runner's own output, saying
+# nothing about the missing repository or the missing admin rights that
+# actually caused it.
+#
+# The shape test is what makes this reliable rather than the exit status
+# alone: a token is alphanumeric, and no JSON body can be.
+_rp_registration_token() {
+  local token
+  token=$(gh api -X POST "$(_rp_scope_path "$1" "$2")/actions/runners/registration-token" \
+            --jq '.token' 2>/dev/null) || return 1
+  case "${token}" in
+    ''|*[!A-Za-z0-9]*) return 1 ;;
+  esac
+  echo "${token}"
+}
+
+# ---------------------------------------------------------------------------
+# Per-pool resize lock
+# ---------------------------------------------------------------------------
+# Two resizes of one pool must not interleave. A grow fetches the runner
+# tarball and runs config.sh once per new runner, so it can be working for
+# tens of seconds, and --if-count does not help: both callers would pass their
+# own check before either wrote a count.
+#
+# mkdir is the lock, for the reason the tick already uses it: atomic on every
+# POSIX filesystem, and macOS has no flock. The stale break keeps a resize
+# killed halfway from wedging a pool for good. Thirty minutes is far longer
+# than any real resize and short enough to recover from without a manual step.
+RUNPOOL_RESIZE_STALE=1800
+
+_rp_resize_lock_dir() { echo "${RUNPOOL_STATE_DIR}/resize.$1.lock"; }
+
+_rp_resize_lock() {
+  local lock age; lock="$(_rp_resize_lock_dir "$1")"
+  mkdir -p "${RUNPOOL_STATE_DIR}" 2>/dev/null
+  if mkdir "${lock}" 2>/dev/null; then return 0; fi
+
+  age=$(( $(_rp_now) - $(stat -f %m "${lock}" 2>/dev/null || echo 0) ))
+  if [ "${age}" -lt "${RUNPOOL_RESIZE_STALE}" ]; then
+    _rp_err "pool '$1' is already being resized — wait for that to finish, then retry."
+    return 1
+  fi
+  _rp_log "resize: breaking a stale lock on '$1' (${age}s old)"
+  rm -rf "${lock}"
+  mkdir "${lock}" 2>/dev/null || { _rp_err "could not lock pool '$1' for resize"; return 1; }
+  return 0
+}
+
+_rp_resize_unlock() { rm -rf "$(_rp_resize_lock_dir "$1")"; }
+
 _rp_deregister_runner() {
   local runner_dir="$1" scope="$2" target="$3" id url
   [ -f "${runner_dir}/.runner" ] || return 0   # never registered

@@ -38,3 +38,5 @@ jobs:
           done
       - name: storage migration
         run: tests/storage-migration.sh
+      - name: set-count guards
+        run: tests/set-count-guards.sh

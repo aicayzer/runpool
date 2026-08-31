@@ -153,9 +153,8 @@ _rp_register() {
       mkdir -p "${runner_dir}"
       mkdir -p "${cache_dir}/work" "${cache_dir}/pnpm" "${cache_dir}/npm" "${cache_dir}/tmp"
       [ -f "${runner_dir}/config.sh" ] || tar -xzf "${tarball}" -C "${runner_dir}" || return 1
-      token=$(gh api -X POST "$(_rp_scope_path "${scope}" "${target}")/actions/runners/registration-token" \
-                --jq '.token' 2>/dev/null)
-      [ -n "${token}" ] || { _rp_err "${name} runner-${i}: no registration token (need admin on ${target})"; return 1; }
+      token="$(_rp_registration_token "${scope}" "${target}")" \
+        || { _rp_err "${name} runner-${i}: no registration token — check 'gh auth status', that ${target} exists, and that you have admin on it"; return 1; }
       runner_name="$(hostname -s)-${name}-${i}"
       _rp_log "${name} runner-${i}: registering as '${runner_name}'"
       ( cd "${runner_dir}" && ./config.sh --unattended --replace \
@@ -233,14 +232,70 @@ _rp_write_pool_watch() {
   ' "${conf}" >| "${conf}.tmp" && mv -f "${conf}.tmp" "${conf}"
 }
 
+# Arguments used to be read as $1 and $2 with anything further ignored in
+# silence, which is how a mistyped flag became invisible. They are parsed
+# properly now and anything unrecognised is refused.
+_rp_set_count_usage() { echo "usage: runpool set-count <pool> <n> [--if-count <n>]"; }
+
 _rp_set_count() {
   _rp_require gh || return 1
-  local name="$1" want="$2"
-  [ -n "${name}" ] && [ -n "${want}" ] || { _rp_err "usage: runpool set-count <pool> <n>"; return 1; }
+  local name="" want="" expect="" rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --if-count)
+        [ $# -ge 2 ] || { _rp_err "--if-count needs a value ($(_rp_set_count_usage))"; return 1; }
+        expect="$2"; shift 2 ;;
+      --if-count=*)
+        expect="${1#*=}"; shift ;;
+      -*)
+        _rp_err "unknown flag: $1 ($(_rp_set_count_usage))"; return 1 ;;
+      *)
+        if   [ -z "${name}" ]; then name="$1"
+        elif [ -z "${want}" ]; then want="$1"
+        else _rp_err "unexpected argument: $1 ($(_rp_set_count_usage))"; return 1
+        fi
+        shift ;;
+    esac
+  done
+
+  [ -n "${name}" ] && [ -n "${want}" ] || { _rp_err "$(_rp_set_count_usage)"; return 1; }
+  # Checked before the name reaches a lock path, which is built from it.
+  _rp_valid_pool_name "${name}" || { _rp_err "invalid pool name: '${name}'"; return 1; }
   _rp_valid_count "${want}" || { _rp_err "count: $(_rp_count_rule), got '${want}'"; return 1; }
+  if [ -n "${expect}" ]; then
+    _rp_valid_count "${expect}" || { _rp_err "--if-count: $(_rp_count_rule), got '${expect}'"; return 1; }
+  fi
+
+  # Held across the whole resize, and released on every exit path by doing the
+  # work in a separate function rather than with a trap. `apply` calls this in
+  # a loop and installs traps of its own, which a trap set here would clobber.
+  _rp_resize_lock "${name}" || return 1
+  _rp_set_count_locked "${name}" "${want}" "${expect}"
+  rc=$?
+  _rp_resize_unlock "${name}"
+  return ${rc}
+}
+
+_rp_set_count_locked() {
+  local name="$1" want="$2" expect="$3"
   _rp_load_pool "${name}" || return 1
 
   local have="${POOL_COUNT}"
+
+  # Compare-and-swap. `set-count` writes an absolute number, so a caller that
+  # read the count, asked the user a question, and then wrote what it worked
+  # out beforehand can turn a growth into a shrink and deregister runners
+  # nobody agreed to. Refusing on a moved count is what makes that caller safe.
+  #
+  # Checked before the "already at that count" shortcut below, because a
+  # premise that no longer holds is a failure whatever the target happens to
+  # be: returning success for `set-count p 6 --if-count 4` on a pool that has
+  # become 6 would tell the caller its stale view was right.
+  if [ -n "${expect}" ] && [ "${expect}" != "${have}" ]; then
+    _rp_err "'${name}' has ${have} runner(s), not ${expect} — refusing to resize. Something else changed it; re-read the count and retry."
+    return 1
+  fi
+
   if [ "${want}" = "${have}" ]; then _rp_log "pool '${name}': already ${have} runner(s)"; return 0; fi
 
   # Resizing either kills a live job or races a registration against one.
@@ -250,7 +305,7 @@ _rp_set_count() {
     return 1
   fi
 
-  local was_up=0 i runner_dir cache_dir label token runner_name tarball
+  local was_up=0 orphaned=0 i runner_dir cache_dir label token runner_name tarball
   _rp_agent_loaded "$(_rp_label "${name}" 1)" && was_up=1
 
   if [ "${want}" -gt "${have}" ]; then
@@ -263,9 +318,8 @@ _rp_set_count() {
       _rp_prepare_runner_cache "${name}" "${i}"
       [ -f "${runner_dir}/config.sh" ] || tar -xzf "${tarball}" -C "${runner_dir}" || return 1
       if [ ! -f "${runner_dir}/.runner" ]; then
-        token=$(gh api -X POST "$(_rp_scope_path "${POOL_SCOPE}" "${POOL_TARGET}")/actions/runners/registration-token" \
-                  --jq '.token' 2>/dev/null)
-        [ -n "${token}" ] || { _rp_err "${name} runner-${i}: no registration token"; return 1; }
+        token="$(_rp_registration_token "${POOL_SCOPE}" "${POOL_TARGET}")" \
+          || { _rp_err "${name} runner-${i}: no registration token — check 'gh auth status', that ${POOL_TARGET} exists, and that you have admin on it"; return 1; }
         runner_name="$(hostname -s)-${name}-${i}"
         _rp_log "${name} runner-${i}: registering as '${runner_name}'"
         ( cd "${runner_dir}" && ./config.sh --unattended --replace \
@@ -296,7 +350,11 @@ _rp_set_count() {
       # Deregister before deleting. A runner removed locally but left
       # registered shows on GitHub as permanently offline and still gets
       # counted when a job looks for somewhere to run.
-      _rp_deregister_runner "${runner_dir}" "${POOL_SCOPE}" "${POOL_TARGET}"
+      #
+      # Counted rather than fatal. Stopping here would leave the pool half
+      # shrunk against a count already written, so the local cleanup finishes
+      # and the command reports the failure at the end instead.
+      _rp_deregister_runner "${runner_dir}" "${POOL_SCOPE}" "${POOL_TARGET}" || orphaned=$(( orphaned + 1 ))
       rm -f "${RUNPOOL_AGENT_DIR}/${label}.plist"
       rm -rf "${runner_dir}"
       [ "${POOL_LEGACY_LAYOUT}" = "1" ] || rm -rf "${cache_dir}"
@@ -313,6 +371,17 @@ _rp_set_count() {
   _rp_log "pool '${name}': ${have} -> ${want} runner(s)"
   if [ "${was_up}" = "1" ] && ! _rp_pool_paused "${name}"; then
     _rp_load_pool "${name}" && _rp_up "${name}"
+  fi
+
+  # Reported last, and as a failure, because everything above succeeded and it
+  # would otherwise read as a clean resize. A registration GitHub still holds
+  # for a runner that no longer exists attracts jobs that then queue forever,
+  # which is the failure this whole tool exists to avoid. The DELETE for each
+  # one is in the log above, and `runpool doctor` keeps reporting the mismatch
+  # until they are gone.
+  if [ "${orphaned}" -gt 0 ]; then
+    _rp_err "${orphaned} runner(s) are still registered on ${POOL_TARGET} — resize finished locally but GitHub was not updated."
+    return 1
   fi
   return 0
 }
@@ -338,9 +407,8 @@ _rp_reregister() {
   while [ "${i}" -le "${POOL_COUNT}" ]; do
     runner_dir="${POOL_DIR}/runner-${i}"
     [ -f "${runner_dir}/config.sh" ] || { _rp_err "${name} runner-${i}: no install at ${runner_dir}"; return 1; }
-    token=$(gh api -X POST "$(_rp_scope_path "${POOL_SCOPE}" "${POOL_TARGET}")/actions/runners/registration-token" \
-              --jq '.token' 2>/dev/null)
-    [ -n "${token}" ] || { _rp_err "${name} runner-${i}: no registration token (need admin on ${POOL_TARGET})"; return 1; }
+    token="$(_rp_registration_token "${POOL_SCOPE}" "${POOL_TARGET}")" \
+      || { _rp_err "${name} runner-${i}: no registration token — check 'gh auth status', that ${POOL_TARGET} exists, and that you have admin on it"; return 1; }
     runner_name="$(hostname -s)-${name}-${i}"
     # config.sh refuses to reconfigure over an existing registration, and
     # --replace only covers a name collision on the server side. Note that
@@ -657,7 +725,7 @@ _rp_down_all() { local p; for p in $(_rp_pool_names); do _rp_down "${p}" "${1:-}
 _rp_remove() {
   _rp_load_pool "$1" || return 1
   _rp_down "$1"
-  local i runner_dir label
+  local i runner_dir label orphaned=0
   # Iterate the directories that exist rather than 1..POOL_COUNT. A pool whose
   # count was lowered by hand still has higher-numbered runners on disk and
   # registered with GitHub, and counting to POOL_COUNT would leave them behind
@@ -667,7 +735,7 @@ _rp_remove() {
     runner_dir="${runner_dir%/}"
     i="${runner_dir##*/runner-}"
     label="$(_rp_label "$1" "${i}")"
-    _rp_deregister_runner "${runner_dir}" "${POOL_SCOPE}" "${POOL_TARGET}"
+    _rp_deregister_runner "${runner_dir}" "${POOL_SCOPE}" "${POOL_TARGET}" || orphaned=$(( orphaned + 1 ))
     rm -f "${RUNPOOL_AGENT_DIR}/${label}.plist"
     rm -rf "${runner_dir}"
   done
@@ -679,4 +747,14 @@ _rp_remove() {
   rm -f "$(_rp_pool_pause_flag "$1")"
   rm -f "$(_rp_pool_conf "$1")"
   _rp_log "pool '$1' removed"
+
+  # Worse here than for a shrink, and worth saying so. After a shrink the pool
+  # still exists and `status` and `doctor` go on reporting the mismatch; after
+  # a remove there is no pool left to report it, so this message and the DELETE
+  # commands above it are the only record that anything is outstanding.
+  if [ "${orphaned}" -gt 0 ]; then
+    _rp_err "${orphaned} runner(s) are still registered on ${POOL_TARGET}. The pool is gone locally, so nothing will report this again — run the DELETE commands above, or remove them from GitHub's runner settings."
+    return 1
+  fi
+  return 0
 }
