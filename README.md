@@ -95,7 +95,7 @@ runpool apply
 The file holds no credentials and nothing machine-specific, so **a second machine gets the same pools by getting the same file.**
 
 - **Reconciliation goes one way.** Pools in the file are created or adjusted; **a pool on the machine and not in the file is reported and left alone**, because a missing line is far too quiet a way to ask for deregistration. `remove` stays explicit.
-- **`--watch` matters for organisation pools.** GitHub reports queued runs per repository and not per organisation, so an org pool with nothing watched never wakes on its own. Repository pools poll their own target and refuse the flag.
+- **`--watch` matters for organisation pools.** GitHub reports queued runs per repository and not per organisation, so an org pool with nothing watched never wakes on its own, and one watching only some of its repositories wakes only for those. `doctor` reports a watch list that has fallen behind the organisation; it does not maintain one. Repository pools poll their own target and refuse the flag.
 
 `skills/runpool/` is an agent skill covering all of this in depth: wiring a repository, choosing a scope, sizing a pool, and diagnosing a job that queues and never starts.
 
