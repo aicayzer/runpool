@@ -530,13 +530,6 @@ _rp_doctor() {
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# autoscale — bring a pool up when it has queued work
-# ---------------------------------------------------------------------------
-# Only DOWN pools are polled: one that is already up is serving, so during
-# active work this makes no API calls at all. An org pool polls the repos named
-# in POOL_WATCH, because GitHub exposes queued runs per repository rather than
-# per organisation.
 # Repositories at an org pool's scope that its watch list does not name.
 #
 # `_rp_autoscale` polls POOL_WATCH because GitHub reports queued runs per
@@ -560,6 +553,13 @@ _rp_unwatched_repos() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# autoscale — bring a pool up when it has queued work
+# ---------------------------------------------------------------------------
+# Only DOWN pools are polled: one that is already up is serving, so during
+# active work this makes no API calls at all. An org pool polls the repos named
+# in POOL_WATCH, because GitHub exposes queued runs per repository rather than
+# per organisation.
 _rp_autoscale() {
   _rp_paused && return 0
   local p up queued q wr

@@ -14,7 +14,7 @@ trap 'rm -rf "${scratch_dir}"' EXIT INT TERM
 # is a pure function and the check that calls it needs GitHub. Every path the
 # library reads at load time points into a scratch directory, so nothing here
 # can see or touch a real installation.
-export RUNPOOL_BASE_DIR="${scratch_dir}/base"
+export RUNPOOL_BASE="${scratch_dir}/base"
 export RUNPOOL_STATE_DIR="${scratch_dir}/state"
 export RUNPOOL_CACHE_DIR="${scratch_dir}/cache"
 export RUNPOOL_CONFIG="${scratch_dir}/runpool.conf"
@@ -22,7 +22,7 @@ export RUNPOOL_POOLS_FILE="${scratch_dir}/pools"
 export RUNPOOL_LOG_DIR="${scratch_dir}/logs"
 export RUNPOOL_LOG="${scratch_dir}/logs/runpool.log"
 export RUNPOOL_AGENT_DIR="${scratch_dir}/agents"
-mkdir -p "${RUNPOOL_BASE_DIR}" "${RUNPOOL_STATE_DIR}" "${RUNPOOL_CACHE_DIR}" "${RUNPOOL_LOG_DIR}" "${RUNPOOL_AGENT_DIR}"
+mkdir -p "${RUNPOOL_BASE}" "${RUNPOOL_STATE_DIR}" "${RUNPOOL_CACHE_DIR}" "${RUNPOOL_LOG_DIR}" "${RUNPOOL_AGENT_DIR}"
 
 # shellcheck source=/dev/null
 . "${repo_dir}/lib/common.sh" 2>/dev/null || true
