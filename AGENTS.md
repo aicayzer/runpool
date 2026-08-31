@@ -14,7 +14,7 @@ Break any of these and the tool stops being what it is.
 
 - **Bash 3.2.** Stock macOS ships bash 3.2 and the tool must run there. No associative arrays, no `mapfile`/`readarray`, no `${var^^}`, no `&>>`. CI parses every file under `/bin/bash` on a macOS runner to enforce this.
 - **macOS only.** launchd, `sysctl`, `~/Library` paths, the `osx-arm64` runner build. Do not add Linux or Windows support: that case is already well served by actions-runner-controller and garm, and serving it would mean competing where there is no gap.
-- **No notifier.** `lib/notify.sh` writes one JSON object to whatever `RUNPOOL_NOTIFY_CMD` names. It must never grow mail sending, address routing, severity policy, dedup windows, or a dependency on a particular service. An earlier version of this tool had all of those and it is exactly why it could not be published.
+- **No notifier.** `lib/notify.sh` writes one JSON object to whatever `RUNPOOL_NOTIFY_CMD` names. It must never grow mail sending, address routing, severity policy, dedup windows, or a dependency on a particular service. An earlier version had all of those and it is exactly why it could not be published.
 - **No workflow-result watching.** Reporting on failed CI runs is observability and belongs to whatever receives the notifications, which can poll GitHub without depending on a laptop being awake. This tool reports only on the health of the pool itself.
 - **Nothing personal in the repository.** No real organisation names, repository names, hostnames, addresses or paths, in code, comments, docs or examples. Use `acme` / `acme-inc` / `me/side-project`. Installation specifics belong in the user's config file, never here.
 - **No secrets, ever.** Registration credentials live in the runtime directory, which is outside this repo by design. Nothing in a checkout should reveal anything about the machine it came from.
@@ -23,7 +23,7 @@ Break any of these and the tool stops being what it is.
 ## Layout
 
 ```
-bin/runpool          the executable and its dispatcher
+bin/runpool          the executable, its dispatcher, its help text, and RUNPOOL_VERSION
 lib/common.sh        config, logging, pool loading, launch agents, deregistration
 lib/lifecycle.sh     register, set-count, up, down, reregister, remove
 lib/apply.sh         the pools file, and reconciling the machine to it
@@ -31,15 +31,65 @@ lib/scheduler.sh     status, doctor, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
 lib/stats.sh         job durations from recorded telemetry, and queue times
                      via contrib/telemetry-join.sh
+tests/               offline test scripts, all three run by CI
 contrib/             optional pieces the user opts into: job hook, webhook notifier,
                      demo status fixture
 skills/runpool/      agent skill for *using* runpool, shipped with the tool
 assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 ```
 
-**`skills/runpool/SKILL.md` and this file have different audiences and must not converge.** This file is for changing runpool. The skill is for an agent wiring some other repository to it, choosing a scope, or working out why a job is queued and nothing has picked it up. If a change alters observable behaviour, the skill needs updating; if it alters how the code is structured, this file does.
+**`skills/runpool/` and this file have different audiences and must not converge.** This file is for changing runpool. The skill is for an agent wiring some other repository to it, choosing a scope, sizing a pool, or working out why a job is queued and nothing has picked it up. **If a change alters observable behaviour, the skill needs updating**; if it alters how the code is structured, this file does. The skill is a hub plus `SIZING.md` and `MIGRATION.md`; keep it that shape rather than growing SKILL.md back into one flat file.
 
 **The split by concern is load-bearing**, not cosmetic. It is what lets the notifier be absent, and what keeps the pools file out of everything that does not read one. Keep new code in the part that owns the concern; if something does not fit, that is a signal the concern is new, not that the split is wrong.
+
+## Conventions
+
+- **Functions are prefixed `_rp_`.** Only the dispatcher in `bin/runpool` is public surface.
+- **`set -uo pipefail`, deliberately without `-e`.** Most logic branches on exit status and the failures that matter are handled with explicit `|| return`. Do not add `-e`.
+- **Sourced fragments carry `# shellcheck shell=bash`** on line one, because they have no shebang and shellcheck cannot infer the dialect otherwise.
+- **Use `>|`, not `>`.** A shell with `noclobber` set refuses to truncate an existing file, which has silently broken this tool twice: once on the activity timestamp and once on launch agent rewriting.
+- **Use `find`, not globs, over directories that may be empty.** An unmatched glob either expands to a literal or aborts the function depending on the shell.
+- **Declare every `local` once, at the top of a function.** Re-declaring inside a loop makes some shells print it as a typeset assignment, which has leaked stray lines into logs.
+- **A constant read in only one file belongs in that file.** shellcheck analyses each file independently, so one defined in `lib/common.sh` and read only in `bin/runpool` trips SC2034.
+- **Comments explain why.** Most of the non-obvious lines here exist because something failed in a specific way, and the comment records that failure. Preserve those; they are the reason the code looks as it does.
+
+## Configuration precedence
+
+Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **A new setting has to be added in four places in that block** — the snapshot, the restore, the `unset`, and the `export` — or it silently becomes un-overridable, or leaks a `_rp_env_*` variable, or fails to reach a child process.
+
+`RUNPOOL_POOLS_FILE` is deliberately derived from `XDG_CONFIG_HOME` rather than from `RUNPOOL_CONFIG`'s directory, so that pointing the config at `/dev/null` to isolate a test does not also move the pools file somewhere unexpected. **The corollary is that neither `RUNPOOL_CONFIG` nor `RUNPOOL_BASE` isolates it** — it has to be set on its own, or overridden per run with `apply --file`. `/dev/null` is a valid value: `apply` tests for a readable non-directory rather than a regular file, so the isolation idiom means the same thing for both settings.
+
+## Working on it
+
+```bash
+# Exactly what CI runs. Note tests/*.sh in both: omit it and CI checks more than you did.
+/bin/bash -n bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
+shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
+
+tests/storage-migration.sh
+tests/set-count-guards.sh
+```
+
+Without shellcheck installed, Docker gives the same result and leaves nothing behind. Skipping the check is how CI goes red unnoticed:
+
+```bash
+docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
+  --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
+```
+
+**The tests run offline and make no API calls**, which is what makes them safe anywhere. A new test must keep that: fabricate pool configs under a scratch `RUNPOOL_BASE`, stub `gh` where a path needs it, and prefer a guard refused early over one that reaches the network. `tests/set-count-guards.sh` probes its lock case with a mismatched `--if-count` for that reason, since a real resize fetches the runner tarball first.
+
+**Test against a scratch directory, never a real installation:**
+
+```bash
+RUNPOOL_BASE=/tmp/rp-test RUNPOOL_CONFIG=/dev/null ./bin/runpool status --json
+```
+
+**`RUNPOOL_BASE` does not move the pools file**, per *Configuration precedence* above. Anything touching `apply` needs `RUNPOOL_POOLS_FILE` or `--file` too, or it reads the real one and plans against real GitHub targets. `RUNPOOL_LOG_DIR` too, or the log lands in a real installation's. `CONTRIBUTING.md` has the full isolated invocation.
+
+**`register`, `set-count`, `reregister` and `remove` talk to the real GitHub API and real runners.** None has a dry-run and there is nowhere sensible to add one, because the work *is* the API call. Verify destructive changes against a throwaway private repository, never while a job is in flight — the tool refuses on purpose, and forcing past that kills live jobs.
+
+**`apply --dry-run` is the one exception, and only for the plan.** It reads the pools file and the pool configs, prints what it would do, and calls nothing, which makes all of `lib/apply.sh` testable with no GitHub account. What it does *not* cover: visibility is checked inside `register`, which a dry run never reaches, so a `+` line is a plan and not a promise.
 
 ## The icon
 
@@ -54,47 +104,6 @@ rsvg-convert -w 1024 -h 1024 assets/icon.svg -o assets/icon@1024.png
 
 The background is transparent and there are no baked-in rounded corners, so the mark works on light and dark and is never double-rounded by anything that masks it.
 
-## Conventions
-
-- **Functions are prefixed `_rp_`.** Only the dispatcher in `bin/runpool` is public surface.
-- **`set -uo pipefail`, deliberately without `-e`.** Most logic branches on exit status and the failures that matter are handled with explicit `|| return`. Do not add `-e`.
-- **Sourced fragments carry `# shellcheck shell=bash`** on line one, because they have no shebang and shellcheck cannot infer the dialect otherwise.
-- **Use `>|`, not `>`.** A shell with `noclobber` set refuses to truncate an existing file, which has silently broken this tool twice: once on the activity timestamp and once on launch agent rewriting.
-- **Use `find`, not globs, over directories that may be empty.** An unmatched glob either expands to a literal or aborts the function depending on the shell.
-- **Declare every `local` once, at the top of a function.** Re-declaring inside a loop makes some shells print it as a typeset assignment, which has leaked stray lines into logs.
-- **Comments explain why.** Most of the non-obvious lines here exist because something failed in a specific way, and the comment records that failure. Preserve those; they are the reason the code looks as it does.
-
-## Configuration precedence
-
-Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **A new setting has to be added in four places in that block** — the snapshot, the restore, the `unset`, and the `export` — or it silently becomes un-overridable, or leaks a `_rp_env_*` variable, or fails to reach a child process.
-
-`RUNPOOL_POOLS_FILE` is deliberately derived from `XDG_CONFIG_HOME` rather than from `RUNPOOL_CONFIG`'s directory, so that pointing the config at `/dev/null` to isolate a test does not also move the pools file somewhere unexpected. **The corollary is that neither `RUNPOOL_CONFIG` nor `RUNPOOL_BASE` isolates it** — it has to be set on its own, or overridden per run with `apply --file`. `/dev/null` is a valid value: `apply` tests for a readable non-directory rather than a regular file, so the isolation idiom means the same thing for both settings.
-
-## Working on it
-
-```bash
-/bin/bash -n bin/runpool lib/*.sh contrib/*.sh install.sh   # parse under stock bash
-shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh install.sh
-
-# CI runs exactly that. Without shellcheck installed, Docker gives the same
-# result and leaves nothing behind — skipping the check is how CI goes red
-# unnoticed:
-docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
-  --severity=warning bin/runpool lib/*.sh contrib/*.sh install.sh
-```
-
-**Test against a scratch directory, never a real installation:**
-
-```bash
-RUNPOOL_BASE=/tmp/rp-test RUNPOOL_CONFIG=/dev/null ./bin/runpool status --json
-```
-
-**`RUNPOOL_BASE` does not move the pools file**, by the design noted under *Configuration precedence* above. Anything touching `apply` needs `RUNPOOL_POOLS_FILE` or `--file` as well, or it reads the real one and plans against real GitHub targets. `RUNPOOL_LOG_DIR` too, or the log lands in a real installation's.
-
-**Anything that registers, resizes or removes a pool talks to the real GitHub API and to real runners.** `register`, `set-count`, `reregister` and `remove` have no dry-run and there is nowhere sensible to add one, because the work *is* the API call. Verify destructive changes against a throwaway private repository, and never while a job is in flight — the tool refuses on purpose, and forcing past that kills live jobs.
-
-**`apply --dry-run` is the one exception, and only for the plan.** It reads the pools file and the pool configs, prints what it would do, and calls nothing. That makes the whole of `lib/apply.sh` testable with hand-made pool configs under a scratch `RUNPOOL_BASE`, a scratch `RUNPOOL_POOLS_FILE`, and no GitHub account at all. Note what it does *not* cover: a repository's visibility is checked inside `register`, which a dry run never reaches, so a `+` line is a plan and not a promise.
-
 ## Issues
 
 **Every defect found gets a GitHub issue, including one fixed in the same session.** The issue is the record of what was wrong and why the fix looks the way it does; a commit message alone is not discoverable later. Close it referencing the commit.
@@ -103,11 +112,12 @@ The pattern is already established: configuration precedence was found and fixed
 
 ## Releases
 
-1. Land the change on `main` with CI green.
-2. `git tag -a vX.Y.Z` and push the tag.
-3. `gh release create vX.Y.Z` with notes describing what changed for a user.
-4. Update the Homebrew formula in the tap repository: bump `url` to the new tag and recompute `sha256` from the release tarball.
-5. `brew audit --strict` and `brew test` against the formula before pushing it.
+1. **Bump `RUNPOOL_VERSION` in `bin/runpool`.** It is the only place the version is written, and the formula builds from a git tag, so a tag without a matching bump ships a binary that misreports itself.
+2. Land the change on `main` with CI green.
+3. `git tag -a vX.Y.Z` and push the tag.
+4. `gh release create vX.Y.Z` with notes describing what changed for a user.
+5. Update the Homebrew formula in the tap repository: bump `url` to the new tag and recompute `sha256` from the release tarball.
+6. `brew audit --strict` and `brew test` against the formula before pushing it.
 
 **The formula installs `bin/` and `lib/` together under `libexec` and symlinks only the executable into `bin`.** The executable resolves its own location, following symlinks, to find `lib/` next to itself. Installing the script directly into `bin` puts `lib/` one directory too high and breaks it.
 

@@ -22,15 +22,15 @@ RunPool manages **capacity** on **one Mac**. Things that are out of scope by des
 Before opening a pull request:
 
 ```bash
-/bin/bash -n bin/runpool lib/*.sh contrib/*.sh install.sh
-shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh install.sh
+/bin/bash -n bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
+shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
 ```
 
 CI runs exactly that. If shellcheck is not installed, Docker gives the same answer and leaves nothing behind:
 
 ```bash
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
-  --severity=warning bin/runpool lib/*.sh contrib/*.sh install.sh
+  --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
 ```
 
 ## Testing against a real machine
