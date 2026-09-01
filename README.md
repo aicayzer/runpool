@@ -5,6 +5,7 @@
 [![CI](https://github.com/aicayzer/runpool/actions/workflows/ci.yml/badge.svg)](https://github.com/aicayzer/runpool/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/aicayzer/runpool)](https://github.com/aicayzer/runpool/releases)
 [![Licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+[![Raycast](https://img.shields.io/badge/Raycast-extension-FF6363)](https://www.raycast.com/aic/runpool)
 
 Runners wake when jobs queue and stand down when nothing has run for a while. Nothing sits in the background for a repository you are not touching, and nothing starts at login.
 
@@ -36,6 +37,16 @@ runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
 ```
 
 `brew upgrade runpool` updates it, from the [aicayzer/homebrew-tap](https://github.com/aicayzer/homebrew-tap) tap. To work from source instead, `./install.sh` symlinks `runpool` onto your PATH from wherever you cloned it, so `git pull` is the update.
+
+## Raycast extension
+
+<img src="assets/raycast.png" width="640" alt="The RunPool Raycast extension listing three runner pools">
+
+**[Available in the Raycast store](https://www.raycast.com/aic/runpool).** Start and stop pools, change runner counts, disable local CI and see what is running, without a terminal. An optional menu bar readout fills to the jobs in flight, and a set of AI tools come with it.
+
+```
+raycast://extensions/aic/runpool
+```
 
 ## How it works
 
@@ -124,14 +135,6 @@ RunPool detects. It does not deliver. Set `RUNPOOL_NOTIFY_CMD` to any command re
 Unset, it reports nothing and works as well. `contrib/notify-webhook.sh` is a reference implementation.
 
 **Only pool connectivity failures are reported**: a missing GitHub registration, or runners running locally but unreachable from GitHub. Failed workflow runs deliberately are not, because watching CI results should not depend on this laptop being awake.
-
-## Raycast extension
-
-<img src="assets/raycast.png" width="640" alt="The RunPool Raycast extension listing three runner pools">
-
-Start and stop pools, change runner counts, disable local CI and see what is running, without a terminal. An optional menu bar readout and a set of AI tools come with it.
-
-**In review for the Raycast store** ([raycast/extensions#30343](https://github.com/raycast/extensions/pull/30343)). Until it lands, run it from a clone of that branch with `npm install && npm run dev`.
 
 ## Things worth knowing
 
