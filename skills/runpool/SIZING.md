@@ -35,7 +35,7 @@ One row per job: duration, queue time, load at start, concurrency, and the raw c
 
 **The standard argument is that more runners is not more throughput**, because a single test job commonly forks one worker per core, so several in parallel thrash rather than run faster. Treat that as an argument, not a fact. It may hold on a given machine and it may not, and the difference is measurable.
 
-**If red runs come and go, suspect contention before suspecting the code.** Lower the count, or cap per-job worker counts in the test runner. The job hook in `contrib/` stamps machine load into every job so this is visible rather than guessed at.
+**If red runs come and go, suspect contention before suspecting the code.** Lower the count with `runpool set-count <pool> N --drain` — a contended pool is by definition a busy one, so without `--drain` the resize is refused exactly when you need it — or cap per-job worker counts in the test runner. The job hook in `contrib/` stamps machine load into every job so this is visible rather than guessed at.
 
 ## The ceiling is not in the data
 

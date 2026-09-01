@@ -145,13 +145,23 @@ The JSON carries each pool's watched repositories and the paths to its logs, so 
 ```bash
 runpool set-count <pool> 4
 runpool set-count <pool> 4 --if-count 2    # refuse unless it is still at 2
+runpool set-count <pool> 2 --drain         # let running jobs finish first
+runpool down <pool> --drain                # same, without resizing
 ```
 
 **`set-count` writes an absolute number, so anything that read the count earlier must pass `--if-count`.** Between the read and the write the pool may have moved, and a command meant to grow it then shrinks it instead, deregistering runners that setting the number back does not restore. Pass the count you read as `--if-count` and the resize is refused rather than guessed at. One resize per pool runs at a time, so two callers cannot interleave.
 
 A deregistration that fails is reported as a failure, not passed over. A registration GitHub still holds for a runner that no longer exists attracts jobs that queue forever, so if a resize reports orphaned runners, clear them before moving on.
 
-Resizing refuses while a job is running. Wait rather than forcing.
+**Resizing refuses while a job is running, and `--drain` is the way through.** Stopping a runner mid-job fails that job, so the refusal is right — but on a pool serving work continuously there is never a quiet moment, and the pool that most needs resizing is the busy one. `--drain` stops the runners accepting new work, waits for what is already running to finish, then resizes.
+
+- **It is opt-in, not the default.** A command that silently blocks for an hour is worse than one that refuses, and a blocking command is indistinguishable from a hung one.
+- **The wait is bounded** by `--timeout`, defaulting to `RUNPOOL_DRAIN_TIMEOUT` (4200s). Set that above the longest `timeout-minutes` any workflow on the pool allows, not above how long jobs actually take: a drain bounded at exactly the job cap can time out on a job GitHub was still happily running.
+- **It reports what it is waiting for** every 30 seconds. Do not interrupt it because it has gone quiet; it has not.
+- **On timeout the runners are already stopped** and will exit as their jobs finish. Retry, or `down <pool> --force` to end them now.
+- **`--drain` and `--force` are mutually exclusive.** One waits for jobs, the other ends them.
+
+**A pool upgraded to 0.10.0 but not yet restarted cannot drain**, because its loaded agents predate the graceful-shutdown setting. The drain detects this per runner and refuses rather than killing the job; the fix it names is `runpool rewrite-agents` then a down/up cycle once the pool is idle.
 
 **Before changing a count, read [SIZING.md](SIZING.md).** More runners is not reliably more throughput, and the figure that answers the question is queue time rather than duration.
 

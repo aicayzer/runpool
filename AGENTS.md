@@ -31,7 +31,7 @@ lib/scheduler.sh     status, doctor, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
 lib/stats.sh         job durations from recorded telemetry, and queue times
                      via contrib/telemetry-join.sh
-tests/               offline test scripts, all three run by CI
+tests/               offline test scripts, all four run by CI
 contrib/             optional pieces the user opts into: job hook, webhook notifier,
                      demo status fixture
 skills/runpool/      agent skill for *using* runpool, shipped with the tool
@@ -53,6 +53,20 @@ assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 - **A constant read in only one file belongs in that file.** shellcheck analyses each file independently, so one defined in `lib/common.sh` and read only in `bin/runpool` trips SC2034.
 - **Comments explain why.** Most of the non-obvious lines here exist because something failed in a specific way, and the comment records that failure. Preserve those; they are the reason the code looks as it does.
 
+## The launch agent carries behaviour, not just plumbing
+
+**Two plist keys are load-bearing and neither looks it.** `RUNNER_MANUALLY_TRAP_SIG` is what makes GitHub's `run.sh` finish its current job on SIGTERM instead of dying with it, and `ExitTimeOut` is what stops launchd sending SIGKILL twenty seconds later. Together they are the whole of `--drain`; remove either and the drain silently becomes the job-killing behaviour it exists to replace.
+
+**The consequence is that an agent already loaded is not necessarily an agent that behaves correctly.** A plist rewritten on disk changes nothing until the pool cycles. Anything depending on agent behaviour must therefore read the *loaded* environment with `launchctl print`, not the file — `_rp_agent_traps_signals` is the example, and `_rp_drain_pool` refuses per runner on the strength of it. The file on disk is what somebody intended; the loaded environment is what is true.
+
+## The reconfiguration lock
+
+**One per-pool lock covers resize and drain, and `up` and autoscale both respect it.** It was originally a resize lock; a drain needs the same exclusion for longer, so the concept widened rather than gaining a second flag to get out of step with.
+
+- **The holder writes its pid into the lock.** `_rp_set_count_locked` calls `_rp_up` at the end of its own work while still holding the lock, so a test for mere existence would deadlock every resize against itself. `_rp_resize_locked_by_other` is the predicate to use.
+- **Staleness is measured from the lock's mtime**, and a drain refreshes it every poll. So an old lock means nobody is tending it, not that the work is slow. Anything that can hold the lock for a long time must call `_rp_resize_lock_touch`.
+- **A dead holder is not an obstacle.** It left the directory behind, and the stale break in `_rp_resize_lock` is what clears it.
+
 ## Configuration precedence
 
 Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **A new setting has to be added in four places in that block** — the snapshot, the restore, the `unset`, and the `export` — or it silently becomes un-overridable, or leaks a `_rp_env_*` variable, or fails to reach a child process.
@@ -69,6 +83,7 @@ shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh insta
 tests/storage-migration.sh
 tests/set-count-guards.sh
 tests/watch-list-staleness.sh
+tests/drain-guards.sh
 ```
 
 Without shellcheck installed, Docker gives the same result and leaves nothing behind. Skipping the check is how CI goes red unnoticed:

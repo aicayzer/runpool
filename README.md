@@ -50,9 +50,9 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | Command | |
 |---|---|
 | `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--watch OWNER/REPO,...] [--allow-public]` | Create a pool and configure its runners |
-| `set-count <pool> N [--if-count M]` | Change a pool's runner count. `--if-count` refuses unless it is currently M |
+| `set-count <pool> N [--if-count M] [--drain]` | Change a pool's runner count. `--if-count` refuses unless it is currently M; `--drain` lets running jobs finish first |
 | `apply [--dry-run] [--file PATH]` | Reconcile the machine to a file describing its pools |
-| `up` / `down <pool>` | Bring a pool online, or stand it down |
+| `up` / `down <pool> [--drain\|--force]` | Bring a pool online, or stand it down. `--drain` waits for running jobs; `--force` ends them |
 | `up-all` / `down-all` | The same, for every pool |
 | `status [--json] [--local]` | Local state alongside what GitHub actually sees |
 | `doctor` | Why is nothing picking this up. Reports; changes nothing |
@@ -72,6 +72,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 
 Three commands earn a note beyond the table:
 
+- **A busy pool is resized with `--drain`.** Both `set-count` and `down` refuse by default while a job is running, because stopping a runner mid-job fails that job. On a pool that is serving work continuously that refusal has no way through, and the pool most likely to need resizing is the busy one. `--drain` stops the runners accepting new jobs, waits for the ones already running to finish, and then proceeds. The wait is bounded by `RUNPOOL_DRAIN_TIMEOUT`, and it reports what it is still waiting for rather than going quiet. It is opt-in because a command that silently blocks for an hour is worse than one that refuses.
 - **`set-count` is absolute, so a caller that reads a count and acts on it later needs `--if-count`.** A pool changed in between turns a growth into a shrink, and shrinking deregisters runners. `--if-count M` refuses unless the pool is still at M, and one resize per pool runs at a time so two callers cannot interleave. A runner deregistered locally that GitHub still holds is reported as a failure, not logged and passed over: a stale registration attracts jobs that then queue forever.
 - **`status --json --local` skips the GitHub query**, reporting those fields as `null`. The root `paused` field is the global kill switch; every pool also carries its own additive `paused` field. Anything refreshing on a timer should use `--local`, since one API call per pool per minute is thousands a day and makes a passive readout fail whenever the network does.
 - **`doctor` answers "why is nothing picking this up" in one command.** It checks `gh` and its authentication, that GitHub still holds the registrations, that the launch agents exist, and then disk headroom, config permissions and the organisation's runner-group setting. Each failure comes with what to do about it, and it exits non-zero when something is actually wrong. It repairs nothing, so it is safe at any moment including mid-job.

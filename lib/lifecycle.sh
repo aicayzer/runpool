@@ -235,11 +235,11 @@ _rp_write_pool_watch() {
 # Arguments used to be read as $1 and $2 with anything further ignored in
 # silence, which is how a mistyped flag became invisible. They are parsed
 # properly now and anything unrecognised is refused.
-_rp_set_count_usage() { echo "usage: runpool set-count <pool> <n> [--if-count <n>]"; }
+_rp_set_count_usage() { echo "usage: runpool set-count <pool> <n> [--if-count <n>] [--drain [--timeout <seconds>]]"; }
 
 _rp_set_count() {
   _rp_require gh || return 1
-  local name="" want="" expect="" rc
+  local name="" want="" expect="" drain=0 timeout="${RUNPOOL_DRAIN_TIMEOUT}" rc
   while [ $# -gt 0 ]; do
     case "$1" in
       --if-count)
@@ -247,6 +247,13 @@ _rp_set_count() {
         expect="$2"; shift 2 ;;
       --if-count=*)
         expect="${1#*=}"; shift ;;
+      --drain)
+        drain=1; shift ;;
+      --timeout)
+        [ $# -ge 2 ] || { _rp_err "--timeout needs a value ($(_rp_set_count_usage))"; return 1; }
+        timeout="$2"; shift 2 ;;
+      --timeout=*)
+        timeout="${1#*=}"; shift ;;
       -*)
         _rp_err "unknown flag: $1 ($(_rp_set_count_usage))"; return 1 ;;
       *)
@@ -265,19 +272,21 @@ _rp_set_count() {
   if [ -n "${expect}" ]; then
     _rp_valid_count "${expect}" || { _rp_err "--if-count: $(_rp_count_rule), got '${expect}'"; return 1; }
   fi
+  case "${timeout}" in ''|*[!0-9]*|0) _rp_err "--timeout: whole seconds above zero, got '${timeout}'"; return 1 ;; esac
 
   # Held across the whole resize, and released on every exit path by doing the
   # work in a separate function rather than with a trap. `apply` calls this in
   # a loop and installs traps of its own, which a trap set here would clobber.
   _rp_resize_lock "${name}" || return 1
-  _rp_set_count_locked "${name}" "${want}" "${expect}"
+  _rp_set_count_locked "${name}" "${want}" "${expect}" "${drain}" "${timeout}"
   rc=$?
   _rp_resize_unlock "${name}"
   return ${rc}
 }
 
 _rp_set_count_locked() {
-  local name="$1" want="$2" expect="$3"
+  local name="$1" want="$2" expect="$3" drain="$4" timeout="$5"
+  local was_up=0 orphaned=0 busy i runner_dir cache_dir label token runner_name tarball
   _rp_load_pool "${name}" || return 1
 
   local have="${POOL_COUNT}"
@@ -298,15 +307,23 @@ _rp_set_count_locked() {
 
   if [ "${want}" = "${have}" ]; then _rp_log "pool '${name}': already ${have} runner(s)"; return 0; fi
 
-  # Resizing either kills a live job or races a registration against one.
-  local busy; busy="$(_rp_busy_in "${POOL_DIR}")"
-  if [ "${busy}" -gt 0 ]; then
-    _rp_err "'${name}' has ${busy} job(s) running — refusing to resize. Wait, then retry."
-    return 1
+  # Read before draining. A drain stops the pool, so asking afterwards would
+  # always say it was already down and it would never be brought back up.
+  was_up=0
+  _rp_agent_loaded "$(_rp_label "${name}" 1)" && was_up=1
+
+  if [ "${drain}" = "1" ]; then
+    _rp_drain_pool "${name}" "${timeout}" || return 1
   fi
 
-  local was_up=0 orphaned=0 i runner_dir cache_dir label token runner_name tarball
-  _rp_agent_loaded "$(_rp_label "${name}" 1)" && was_up=1
+  # Resizing either kills a live job or races a registration against one. A
+  # successful drain leaves nothing busy, so this stays the single guard
+  # rather than something --drain has to be trusted to have handled.
+  busy="$(_rp_busy_in "${POOL_DIR}")"
+  if [ "${busy}" -gt 0 ]; then
+    _rp_err "'${name}' has ${busy} job(s) running — refusing to resize. Wait for them, or retry with --drain to let them finish first."
+    return 1
+  fi
 
   if [ "${want}" -gt "${have}" ]; then
     tarball="$(_rp_fetch_runner_tarball)" || return 1
@@ -674,6 +691,14 @@ _rp_up() {
   _rp_load_pool "$1" || return 1
   if _rp_paused; then _rp_err "runpool is paused — run 'runpool resume' first"; return 1; fi
   if _rp_pool_paused "$1"; then _rp_err "pool '$1' is paused — run 'runpool resume $1' first"; return 1; fi
+  # Not while another process is mid-resize or mid-drain. Restarting a pool
+  # whose runners are deliberately winding down would hand them new work and
+  # undo the drain. Scoped to another process so a resize can still bring the
+  # pool back up at the end of its own work.
+  if _rp_resize_locked_by_other "$1"; then
+    _rp_err "pool '$1' is being reconfigured — wait for that to finish, then retry."
+    return 1
+  fi
   local i label plist loaded=0
   [ -z "${RUNPOOL_JOB_HOOK:-}" ] || _rp_write_hook_wrappers || return 1
   i=1
@@ -697,13 +722,124 @@ _rp_up() {
 # nothing to explain why. Six live jobs were once lost this way. 'sweep' never
 # hits the guard because it only runs when nothing is busy; 'pause' forces
 # deliberately.
+# Which runners in the pool are mid-job, as a list for a progress line.
+_rp_busy_runner_list() {
+  local name="$1" i=1 out=""
+  while [ "${i}" -le "${POOL_COUNT}" ]; do
+    _rp_runner_busy "${POOL_DIR}" "${i}" && out="${out}${out:+, }${i}"
+    i=$(( i + 1 ))
+  done
+  echo "${out}"
+}
+
+# Stand a pool down without killing what it is running.
+#
+# Unloading IS the mechanism, not a step before it. It stops launchd
+# restarting the runner and delivers the SIGTERM that run.sh turns into a
+# graceful finish, so an idle runner exits at once and a busy one finishes its
+# job first. Either way no new work arrives, because the agent is gone.
+#
+# So this is not "wait for a quiet moment, then stop". The pool stops
+# accepting immediately and the wait is only for what was already in flight.
+# Expects the caller to hold the pool's reconfiguration lock.
+_rp_drain_pool() {
+  local name="$1" timeout="$2" i label busy waited=0 poll=5 stale="" on
+
+  # Refuse rather than guess. An agent loaded before this release has no
+  # RUNNER_MANUALLY_TRAP_SIG, so unloading it kills the job — precisely what
+  # this command exists to avoid. Checked against the loaded environment, so
+  # a pool that has already cycled since upgrading drains normally and only
+  # the runners that would actually lose work are refused.
+  i=1
+  while [ "${i}" -le "${POOL_COUNT}" ]; do
+    label="$(_rp_label "${name}" "${i}")"
+    if _rp_agent_loaded "${label}" && ! _rp_agent_traps_signals "${label}"; then
+      stale="${stale}${stale:+, }${i}"
+    fi
+    i=$(( i + 1 ))
+  done
+  if [ -n "${stale}" ]; then
+    _rp_err "cannot drain '${name}': runner(s) ${stale} were started before graceful shutdown was available and would lose their job."
+    _rp_err "fix: 'runpool rewrite-agents', then stand the pool down and up again once it is idle. It drains normally after that."
+    return 1
+  fi
+
+  _rp_log "draining '${name}': runners stopped, jobs already in flight will finish"
+  i=1
+  while [ "${i}" -le "${POOL_COUNT}" ]; do
+    label="$(_rp_label "${name}" "${i}")"
+    _rp_agent_loaded "${label}" && launchctl unload "${RUNPOOL_AGENT_DIR}/${label}.plist" 2>/dev/null
+    i=$(( i + 1 ))
+  done
+
+  while :; do
+    busy="$(_rp_busy_in "${POOL_DIR}")"
+    [ "${busy}" -eq 0 ] && break
+    if [ "${waited}" -ge "${timeout}" ]; then
+      _rp_err "'${name}' still has ${busy} job(s) running after $(( timeout / 60 ))m — no longer waiting."
+      _rp_err "The runners are already stopped and will exit as their jobs finish. Wait and retry, or 'runpool down ${name} --force' to end them now."
+      return 1
+    fi
+    # Say what it is waiting for. A bounded silent wait and a hang look
+    # identical from outside, and somebody will interrupt a drain that was
+    # half a minute from finishing.
+    if [ "$(( waited % 30 ))" = "0" ]; then
+      # Attribution is best-effort: the count comes from one ps scan and the
+      # per-runner match from another, so name the runners only when they
+      # were actually identified rather than printing an empty list.
+      on="$(_rp_busy_runner_list "${name}")"
+      _rp_log "draining '${name}': ${busy} job(s) still running${on:+ on runner(s) ${on}}, up to $(( (timeout - waited) / 60 ))m left"
+    fi
+    _rp_resize_lock_touch "${name}"
+    sleep "${poll}"
+    waited=$(( waited + poll ))
+  done
+
+  _rp_log "drained '${name}': every job finished and every runner is stopped"
+  return 0
+}
+
+_rp_down_usage() { echo "usage: runpool down <pool> [--drain [--timeout <seconds>]] [--force]"; }
+
 _rp_down() {
-  _rp_load_pool "$1" || return 1
-  local force=0 busy i label plist
-  [ "${2:-}" = "--force" ] && force=1
+  local name="" force=0 drain=0 timeout="${RUNPOOL_DRAIN_TIMEOUT}" busy i label plist rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --drain) drain=1; shift ;;
+      --timeout)
+        [ $# -ge 2 ] || { _rp_err "--timeout needs a value ($(_rp_down_usage))"; return 1; }
+        timeout="$2"; shift 2 ;;
+      --timeout=*) timeout="${1#*=}"; shift ;;
+      -*) _rp_err "unknown flag: $1 ($(_rp_down_usage))"; return 1 ;;
+      *)
+        [ -z "${name}" ] || { _rp_err "unexpected argument: $1 ($(_rp_down_usage))"; return 1; }
+        name="$1"; shift ;;
+    esac
+  done
+  [ -n "${name}" ] || { _rp_err "$(_rp_down_usage)"; return 1; }
+  case "${timeout}" in ''|*[!0-9]*|0) _rp_err "--timeout: whole seconds above zero, got '${timeout}'"; return 1 ;; esac
+  if [ "${drain}" = "1" ] && [ "${force}" = "1" ]; then
+    _rp_err "--drain waits for jobs to finish and --force ends them now; pick one"
+    return 1
+  fi
+  _rp_load_pool "${name}" || return 1
+
+  if [ "${drain}" = "1" ]; then
+    # Held for the same reason a resize holds it: autoscale must not restart
+    # the pool while its runners are winding down.
+    _rp_resize_lock "${name}" || return 1
+    _rp_drain_pool "${name}" "${timeout}"; rc=$?
+    _rp_resize_unlock "${name}"
+    [ "${rc}" = "0" ] || return "${rc}"
+    _rp_log "Stopped pool '${name}'. Runners remain registered."
+    return 0
+  fi
+
+  set -- "${name}"
   busy="$(_rp_busy_in "${POOL_DIR}")"
   if [ "${busy}" -gt 0 ] && [ "${force}" = "0" ]; then
-    _rp_err "'$1' has ${busy} job(s) running — refusing to stand down (they would fail). Wait, or: runpool down $1 --force"
+    _rp_err "'$1' has ${busy} job(s) running — refusing to stand down (they would fail). Wait for them, or: runpool down $1 --drain (finishes them first), or --force (ends them now)"
     return 1
   fi
   i=1
