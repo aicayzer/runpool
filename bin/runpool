@@ -34,7 +34,7 @@ export RUNPOOL_SELF
 # The released version, and the only place it is written. The Homebrew formula
 # builds from a git tag, so a tag without a matching bump here ships a binary
 # that misreports itself.
-RUNPOOL_VERSION="0.9.0"
+RUNPOOL_VERSION="0.10.0"
 
 # shellcheck source=lib/common.sh
 . "${RUNPOOL_ROOT}/lib/common.sh"
@@ -66,7 +66,7 @@ Commands:
   set-count <pool> <n>          Change a pool's runner count
   apply [options]               Reconcile this machine with a pools file
   up <pool>                     Bring a pool online
-  down <pool>                   Stand a pool down
+  down <pool> [options]         Stand a pool down
   up-all                        Bring every pool online
   down-all                      Stand every pool down
   status [options]              Show local state and GitHub's runner state
@@ -117,6 +117,11 @@ Options:
                                 asked a question, and is now acting on the
                                 answer: without it a pool changed in between
                                 can be shrunk by a command meant to grow it.
+  --drain                       Let running jobs finish first, rather than
+                                refusing. This is how a continuously busy
+                                pool gets resized at all.
+  --timeout <seconds>           How long --drain waits before giving up
+                                (default: RUNPOOL_DRAIN_TIMEOUT, 4200)
 HELP
       ;;
     apply)
@@ -131,8 +136,25 @@ Options:
   --file <path>                 Read pools from a different file
 HELP
       ;;
-    up|down)
-      echo "Usage: runpool ${command} <pool>"
+    up)
+      echo "Usage: runpool up <pool>"
+      ;;
+    down)
+      cat <<'HELP'
+Usage: runpool down <pool> [options]
+
+Stand a pool down. Refuses by default while a job is running, because
+stopping a runner mid-job fails that job.
+
+Options:
+  --drain                       Stop accepting new jobs, wait for the ones
+                                already running to finish, then stand down.
+                                The pool stops accepting immediately; the
+                                wait is only for what was already in flight.
+  --timeout <seconds>           How long --drain waits before giving up
+                                (default: RUNPOOL_DRAIN_TIMEOUT, 4200)
+  --force                       Stop now, failing any running job
+HELP
       ;;
     up-all|down-all|tick|autoscale|sweep|pools|doctor|version|rewrite-agents)
       echo "Usage: runpool ${command}"

@@ -28,6 +28,7 @@ _rp_env_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 _rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
 _rp_env_HOOK_DIR="${RUNPOOL_HOOK_DIR:-}"
 _rp_env_TELEMETRY="${RUNPOOL_TELEMETRY:-}"
+_rp_env_DRAIN_TIMEOUT="${RUNPOOL_DRAIN_TIMEOUT:-}"
 
 # 'set -a' exports everything the config assigns, which matters because a
 # notifier or job hook runs as a child process and cannot see a variable that
@@ -50,14 +51,16 @@ set +a
 [ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
 [ -n "${_rp_env_HOOK_DIR}" ]    && RUNPOOL_HOOK_DIR="${_rp_env_HOOK_DIR}"
 [ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
+[ -n "${_rp_env_DRAIN_TIMEOUT}" ] && RUNPOOL_DRAIN_TIMEOUT="${_rp_env_DRAIN_TIMEOUT}"
 unset _rp_env_BASE _rp_env_CACHE_DIR _rp_env_POOLS_FILE _rp_env_LOG_DIR _rp_env_LABEL_NS \
       _rp_env_IDLE_SECS _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
-      _rp_env_HOOK_DIR _rp_env_TELEMETRY
+      _rp_env_HOOK_DIR _rp_env_TELEMETRY _rp_env_DRAIN_TIMEOUT
 
 # Restored values need exporting again: the restore above is a plain assignment
 # and happens after 'set -a' was turned off.
 export RUNPOOL_BASE RUNPOOL_CACHE_DIR RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
        RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_HOOK_DIR RUNPOOL_TELEMETRY \
+       RUNPOOL_DRAIN_TIMEOUT \
        RUNPOOL_CONFIG RUNPOOL_POOLS_FILE
 
 # Required state belongs in Application Support. Runner installations carry
@@ -124,6 +127,22 @@ RUNPOOL_LABEL_NS="${RUNPOOL_LABEL_NS:-runpool}"
 # Restarting a runner is cheap and needs no re-registration, so a short grace
 # only avoids churn between rapid pushes inside one working session.
 RUNPOOL_IDLE_SECS="${RUNPOOL_IDLE_SECS:-1200}"
+
+# How long `--drain` waits for running jobs to finish before giving up.
+#
+# Derive this from the longest job the pool could serve plus the runner's own
+# teardown — not from how long jobs actually take. A workflow capping jobs at
+# `timeout-minutes: 60` and a drain bounded at exactly 60 minutes race each
+# other, and the drain loses in the case that matters: a job at 59m50s is
+# still legitimately running, GitHub has not cut it, and the drain times out
+# during its teardown. The drain would then report a failure for a job that
+# was about to finish cleanly, which is a false negative in the one code path
+# whose whole purpose is not killing work.
+#
+# So the default sits above the common 60-minute job cap rather than above
+# observed durations, which are far shorter. Do not lower it on the grounds
+# that no job takes this long; that is not what the number is for.
+RUNPOOL_DRAIN_TIMEOUT="${RUNPOOL_DRAIN_TIMEOUT:-4200}"
 
 # Load threshold exposed through structured status for consumers that want to
 # distinguish an ordinarily busy machine from exceptional contention. RunPool
@@ -290,6 +309,21 @@ _rp_busy_in() {
 
 _rp_agent_loaded() { launchctl list "$1" >/dev/null 2>&1; }
 
+# Whether the loaded agent finishes its job on SIGTERM rather than dying with
+# it. Reads the environment of the agent as launchd actually loaded it, not the
+# plist on disk: the file is what somebody intended, the loaded environment is
+# what is true. An agent loaded before this key existed keeps running without
+# it until the pool next cycles, and that is the case a drain has to refuse.
+_rp_agent_traps_signals() {
+  launchctl print "gui/$(id -u)/$1" 2>/dev/null | grep -q 'RUNNER_MANUALLY_TRAP_SIG'
+}
+
+# Is one specific runner running a job? Fixed-string, like _rp_busy_in, so a
+# base path containing regex characters cannot change what it matches.
+_rp_runner_busy() {
+  ps -Ao command= 2>/dev/null | grep -F "$1/runner-$2/" | grep -q "Runner.Worker"
+}
+
 # '>|' rather than '>': a shell with noclobber set refuses to truncate an
 # existing file, which silently stopped this timestamp updating and left the
 # idle sweep reading a frozen clock.
@@ -434,17 +468,24 @@ _rp_registration_token() {
 }
 
 # ---------------------------------------------------------------------------
-# Per-pool resize lock
+# Per-pool reconfiguration lock
 # ---------------------------------------------------------------------------
-# Two resizes of one pool must not interleave. A grow fetches the runner
-# tarball and runs config.sh once per new runner, so it can be working for
-# tens of seconds, and --if-count does not help: both callers would pass their
-# own check before either wrote a count.
+# Two reconfigurations of one pool must not interleave. A grow fetches the
+# runner tarball and runs config.sh once per new runner, and a drain waits out
+# whatever job is in flight, so either can hold the pool for a long time.
+# --if-count does not help: both callers would pass their own check before
+# either wrote a count.
 #
 # mkdir is the lock, for the reason the tick already uses it: atomic on every
-# POSIX filesystem, and macOS has no flock. The stale break keeps a resize
-# killed halfway from wedging a pool for good. Thirty minutes is far longer
-# than any real resize and short enough to recover from without a manual step.
+# POSIX filesystem, and macOS has no flock.
+#
+# The holder writes its pid inside. That is what lets `up` and autoscale
+# refuse to start a pool mid-reconfiguration without the holder blocking
+# itself when it restarts the pool at the end of its own work.
+#
+# Staleness is measured from the lock's mtime, not from when it was taken,
+# because a drain refreshes it on every poll. So a lock older than this means
+# nobody is tending it, whatever it was doing.
 RUNPOOL_RESIZE_STALE=1800
 
 _rp_resize_lock_dir() { echo "${RUNPOOL_STATE_DIR}/resize.$1.lock"; }
@@ -452,20 +493,40 @@ _rp_resize_lock_dir() { echo "${RUNPOOL_STATE_DIR}/resize.$1.lock"; }
 _rp_resize_lock() {
   local lock age; lock="$(_rp_resize_lock_dir "$1")"
   mkdir -p "${RUNPOOL_STATE_DIR}" 2>/dev/null
-  if mkdir "${lock}" 2>/dev/null; then return 0; fi
+  if mkdir "${lock}" 2>/dev/null; then echo $$ >| "${lock}/pid"; return 0; fi
 
   age=$(( $(_rp_now) - $(stat -f %m "${lock}" 2>/dev/null || echo 0) ))
   if [ "${age}" -lt "${RUNPOOL_RESIZE_STALE}" ]; then
-    _rp_err "pool '$1' is already being resized — wait for that to finish, then retry."
+    _rp_err "pool '$1' is already being reconfigured — wait for that to finish, then retry."
     return 1
   fi
-  _rp_log "resize: breaking a stale lock on '$1' (${age}s old)"
+  _rp_log "reconfigure: breaking a stale lock on '$1' (${age}s old)"
   rm -rf "${lock}"
-  mkdir "${lock}" 2>/dev/null || { _rp_err "could not lock pool '$1' for resize"; return 1; }
+  mkdir "${lock}" 2>/dev/null || { _rp_err "could not lock pool '$1' for reconfiguration"; return 1; }
+  echo $$ >| "${lock}/pid"
   return 0
 }
 
 _rp_resize_unlock() { rm -rf "$(_rp_resize_lock_dir "$1")"; }
+
+# Keep a long drain from being mistaken for an abandoned lock.
+_rp_resize_lock_touch() { touch "$(_rp_resize_lock_dir "$1")" 2>/dev/null; }
+
+# True when some OTHER live process holds the lock. Used by `up` and autoscale,
+# both of which must leave a pool alone while it is being reconfigured, and
+# both of which are also called BY the holder at the end of its own work — so
+# testing only for the lock's existence would deadlock a resize against itself.
+#
+# A dead holder is not an obstacle: it left the lock behind and the stale break
+# in _rp_resize_lock is what clears it.
+_rp_resize_locked_by_other() {
+  local lock pid; lock="$(_rp_resize_lock_dir "$1")"
+  [ -d "${lock}" ] || return 1
+  pid="$(cat "${lock}/pid" 2>/dev/null)"
+  case "${pid}" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${pid}" = "$$" ] && return 1
+  kill -0 "${pid}" 2>/dev/null
+}
 
 _rp_deregister_runner() {
   local runner_dir="$1" scope="$2" target="$3" id url
@@ -529,6 +590,19 @@ WRAP
 # Agents are written outside ~/Library/LaunchAgents on purpose, so that macOS
 # never starts a runner at login. Pools come up because something asked, or
 # because the tick saw queued work.
+# RUNNER_MANUALLY_TRAP_SIG and ExitTimeOut are what make `--drain` possible,
+# and neither does anything during ordinary operation.
+#
+# GitHub's run.sh checks that variable: set, it installs `trap 'kill -INT
+# -$PID' INT TERM` and forwards SIGINT to the job's process group, which is
+# the documented finish-the-current-job-then-exit path. Unset, SIGTERM kills
+# run.sh and the job dies with it.
+#
+# `launchctl unload` sends SIGTERM and then SIGKILL once ExitTimeOut expires,
+# and the default is around twenty seconds — far shorter than any real job, so
+# the graceful path above would never get to finish. Six hours is generous
+# enough that launchd never beats a drain to it. Not 0: the man page says zero
+# means infinity and warns it can stall shutdown forever.
 _rp_write_plist() {
   local label="$1" dir="$2" cache_dir="$3" legacy_layout="$4" plist="${RUNPOOL_AGENT_DIR}/$1.plist" hook="" pnpm_dir npm_dir tmp_dir
   if [ "${legacy_layout}" = "1" ]; then
@@ -568,6 +642,8 @@ _rp_write_plist() {
     <string>${npm_dir}</string>
     <key>TMPDIR</key>
     <string>${tmp_dir}</string>
+    <key>RUNNER_MANUALLY_TRAP_SIG</key>
+    <string>1</string>
 PLIST
     if [ -n "${hook}" ]; then
       cat <<PLIST
@@ -585,6 +661,8 @@ PLIST
   <true/>
   <key>ThrottleInterval</key>
   <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>21600</integer>
   <key>StandardOutPath</key>
   <string>${RUNPOOL_LOG_DIR}/${label}.log</string>
   <key>StandardErrorPath</key>

@@ -83,9 +83,9 @@ assert_refused "unknown pool" nosuchpool 5 >/dev/null
 
 # --- the resize lock ----------------------------------------------------------
 mkdir -p "${base_dir}/state/resize.alpha.lock"
-out=$(assert_refused "held resize lock" alpha 5)
+out=$(assert_refused "held reconfiguration lock" alpha 5)
 case "${out}" in
-  *"already being resized"*) ;;
+  *"already being reconfigured"*) ;;
   *) fail "held lock: unhelpful message: ${out}" ;;
 esac
 
@@ -99,7 +99,7 @@ esac
 touch -t 200001010000 "${base_dir}/state/resize.alpha.lock"
 out=$(runpool set-count alpha 5 --if-count 3 2>&1)
 case "${out}" in
-  *"already being resized"*) fail "stale lock was not broken: ${out}" ;;
+  *"already being reconfigured"*) fail "stale lock was not broken: ${out}" ;;
   *"has 4 runner(s), not 3"*) ;;
   *) fail "stale lock: unexpected outcome: ${out}" ;;
 esac

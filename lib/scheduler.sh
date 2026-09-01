@@ -122,7 +122,7 @@ _rp_status() {
 # is thousands a day, and it makes a passive readout fail whenever the network
 # does, which is the opposite of what a passive readout is for.
 _rp_status_json() {
-  local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" pool_paused="false" wr wfirst
+  local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" pool_paused="false" reconfiguring="false" wr wfirst
   _rp_paused && paused="true"
   # Machine state belongs here rather than being recomputed by every caller.
   # The load threshold is configurable, so a status consumer that derived it
@@ -148,8 +148,12 @@ _rp_status_json() {
     [ "${first}" = "1" ] || printf ','
     first=0
     _rp_pool_paused "${p}" && pool_paused="true" || pool_paused="false"
-    printf '{"name":"%s","scope":"%s","target":"%s","count":%s,"running":%s,"busy":%s,"paused":%s,"github_registered":%s,"github_online":%s,"watch":[' \
-      "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}" "${running}" "${busy}" "${pool_paused}" "${reg}" "${online}"
+    # A pool mid-resize or mid-drain reads as stopped-but-not-paused, which is
+    # indistinguishable from idle. A consumer showing a Start action would
+    # offer one that `up` is going to refuse.
+    _rp_resize_locked_by_other "${p}" && reconfiguring="true" || reconfiguring="false"
+    printf '{"name":"%s","scope":"%s","target":"%s","count":%s,"running":%s,"busy":%s,"paused":%s,"reconfiguring":%s,"github_registered":%s,"github_online":%s,"watch":[' \
+      "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}" "${running}" "${busy}" "${pool_paused}" "${reconfiguring}" "${reg}" "${online}"
     # An org pool serves many repositories and only its config knows which.
     # Without this a caller cannot show what a pool actually covers.
     wfirst=1
@@ -389,6 +393,18 @@ _rp_doctor() {
       fi
     fi
 
+    # The reconfiguration lock now refuses `up` and is skipped by autoscale, so
+    # one left behind by a resize or drain that was killed halfway is a pool
+    # that silently stops waking. It clears itself on the next attempt, but
+    # nothing says so until then.
+    if _rp_resize_locked_by_other "${p}"; then
+      _rp_doctor_note "${p}: being reconfigured right now (resize or drain in progress) — it will not autoscale until that finishes"
+    elif [ -d "$(_rp_resize_lock_dir "${p}")" ]; then
+      _rp_doctor_warn \
+        "${p}: a reconfiguration lock is left over from a resize or drain that did not finish, so the pool will not autoscale" \
+        "fix: it clears on the next 'runpool set-count' or 'runpool down --drain'; or remove $(_rp_resize_lock_dir "${p}")"
+    fi
+
     if [ "${gh_ok}" = "0" ]; then
       _rp_doctor_note "${p}: ${POOL_SCOPE} ${POOL_TARGET}, ${running}/${POOL_COUNT} running locally (github not checked)"
       continue
@@ -566,6 +582,10 @@ _rp_autoscale() {
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
     _rp_pool_paused "${p}" && continue
+    # A pool mid-drain has its agents deliberately unloaded. Without this the
+    # tick sees a stopped pool with queued work and starts it straight back
+    # up, which both undoes the drain and hands the runners new jobs.
+    _rp_resize_locked_by_other "${p}" && continue
     up="$(_rp_running_in "${p}" "${POOL_COUNT}")"
     [ "${up}" -gt 0 ] && continue
     queued=0

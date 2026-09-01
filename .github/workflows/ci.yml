@@ -42,3 +42,5 @@ jobs:
         run: tests/set-count-guards.sh
       - name: watch-list staleness
         run: tests/watch-list-staleness.sh
+      - name: drain guards
+        run: tests/drain-guards.sh
