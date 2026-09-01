@@ -182,6 +182,10 @@ _rp_now() { date +%s; }
 # at install time rather than looked up on PATH later.
 _rp_self_path() { echo "${RUNPOOL_SELF:-$0}"; }
 
+# What a launchd agent should point at. See RUNPOOL_INVOKED in bin/runpool: the
+# resolved path is version-pinned under Homebrew and disappears on upgrade.
+_rp_agent_path() { echo "${RUNPOOL_INVOKED:-${RUNPOOL_SELF:-$0}}"; }
+
 # ---------------------------------------------------------------------------
 # Pools
 # ---------------------------------------------------------------------------
@@ -308,6 +312,33 @@ _rp_busy_in() {
 }
 
 _rp_agent_loaded() { launchctl list "$1" >/dev/null 2>&1; }
+
+# The program a loaded agent actually names, read from the plist on disk.
+#
+# PlistBuddy reports its own errors on stdout rather than stderr — a missing
+# file answers "File Doesn't Exist, Will Create: ..." and a missing key answers
+# "Does Not Exist" — so redirecting stderr is not enough to tell an answer from
+# a complaint. An absolute path is the only thing worth returning.
+_rp_agent_program() {
+  local plist="${HOME}/Library/LaunchAgents/$1.plist" program
+  [ -f "${plist}" ] || return 1
+  program="$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "${plist}" 2>/dev/null)"
+  case "${program}" in
+    /*) printf '%s\n' "${program}" ;;
+    *)  return 1 ;;
+  esac
+}
+
+# Whether that program is gone. launchd reports an agent as loaded whether or
+# not the file it names still exists, so "loaded" on its own says nothing about
+# whether the thing has run since. Absent plist or unreadable key is not
+# treated as missing: the callers already distinguish not-installed.
+_rp_agent_program_missing() {
+  local program; program="$(_rp_agent_program "$1")"
+  [ -n "${program}" ] || return 1
+  [ -x "${program}" ] && return 1
+  return 0
+}
 
 # Whether the loaded agent finishes its job on SIGTERM rather than dying with
 # it. Reads the environment of the agent as launchd actually loaded it, not the
