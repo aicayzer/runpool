@@ -44,10 +44,6 @@ runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
 
 **[Available in the Raycast store](https://www.raycast.com/aic/runpool).** Start and stop pools, change runner counts, disable local CI and see what is running, without a terminal. An optional menu bar readout fills to the jobs in flight, and a set of AI tools come with it.
 
-```
-raycast://extensions/aic/runpool
-```
-
 ## How it works
 
 - **A pool is a set of runners bound to one GitHub scope.** GitHub offers repository, organisation and enterprise scopes and **no user-account scope**, which is the most surprising thing about self-hosted runners. An organisation shares one pool across its repositories; a personal repository needs its own and cannot borrow an organisation's.
