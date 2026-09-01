@@ -276,7 +276,18 @@ _rp_doctor() {
   tick="${RUNPOOL_LABEL_NS}.tick"
   clean="${RUNPOOL_LABEL_NS}.clean"
   if _rp_agent_loaded "${tick}"; then
-    _rp_doctor_ok "the tick agent is loaded: autoscale, idle standdown and health"
+    # Loaded is not the same as working. launchd keeps reporting an agent as
+    # loaded when the program it names has been deleted, and every run fails
+    # where nothing is watching. A Homebrew upgrade did exactly this: the agent
+    # held a Cellar path from the version it was installed under, that
+    # directory went away, and the machine reported a healthy scheduler while
+    # nothing autoscaled or stood down for weeks.
+    if _rp_agent_program_missing "${tick}"; then
+      _rp_doctor_fail "the tick agent is loaded but points at a program that no longer exists, so nothing autoscales or stands down while every check still reports as healthy: $(_rp_agent_program "${tick}")" \
+                      "fix: runpool schedule install   (rewrites both agents with a path that survives an upgrade)"
+    else
+      _rp_doctor_ok "the tick agent is loaded: autoscale, idle standdown and health"
+    fi
   elif [ -f "${HOME}/Library/LaunchAgents/${tick}.plist" ]; then
     _rp_doctor_fail "the tick agent is installed but not loaded, so nothing autoscales: a queued job waits for a manual 'runpool up' and every pool still reports as healthy" \
                     "fix: runpool schedule install   (rewrites and reloads it)"
@@ -285,7 +296,12 @@ _rp_doctor() {
                     "fix: runpool schedule install"
   fi
   if _rp_agent_loaded "${clean}"; then
-    _rp_doctor_ok "the clean agent is loaded: daily prune at 04:00"
+    if _rp_agent_program_missing "${clean}"; then
+      _rp_doctor_warn "the clean agent is loaded but points at a program that no longer exists, so nothing is being pruned: $(_rp_agent_program "${clean}")" \
+                      "fix: runpool schedule install"
+    else
+      _rp_doctor_ok "the clean agent is loaded: daily prune at 04:00"
+    fi
   else
     _rp_doctor_warn "the clean agent is not loaded, so work directories, diagnostics and superseded runner binaries accrue with nothing collecting them" \
                     "fix: runpool schedule install, or 'runpool clean' by hand"
@@ -905,7 +921,7 @@ PL
 
 _rp_schedule_install() {
   local bin tick clean
-  bin="$(_rp_self_path)"
+  bin="$(_rp_agent_path)"
   tick="${RUNPOOL_LABEL_NS}.tick"
   clean="${RUNPOOL_LABEL_NS}.clean"
 

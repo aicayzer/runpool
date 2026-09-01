@@ -46,3 +46,5 @@ jobs:
         run: tests/drain-guards.sh
       - name: stats queue window
         run: tests/stats-queue-window.sh
+      - name: scheduler agent path
+        run: tests/scheduler-agent-path.sh

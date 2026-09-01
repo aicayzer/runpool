@@ -31,10 +31,19 @@ RUNPOOL_ROOT="$(dirname "${RUNPOOL_BIN_DIR}")"
 RUNPOOL_SELF="${RUNPOOL_BIN_DIR}/runpool"
 export RUNPOOL_SELF
 
+# The path to write into a launchd agent: absolute, but deliberately NOT
+# resolved through symlinks. `RUNPOOL_SELF` above follows them, which is right
+# for finding lib/ and wrong for anything persisted: a Homebrew install
+# resolves to a version-pinned Cellar directory that the next upgrade deletes,
+# leaving launchd loading an agent whose program no longer exists. That fails
+# silently, because a loaded agent still reports as loaded.
+RUNPOOL_INVOKED="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+export RUNPOOL_INVOKED
+
 # The released version, and the only place it is written. The Homebrew formula
 # builds from a git tag, so a tag without a matching bump here ships a binary
 # that misreports itself.
-RUNPOOL_VERSION="0.10.2"
+RUNPOOL_VERSION="0.10.3"
 
 # shellcheck source=lib/common.sh
 . "${RUNPOOL_ROOT}/lib/common.sh"
