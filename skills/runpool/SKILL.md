@@ -124,6 +124,7 @@ It works down the whole list below in one pass, prints a remedy against each fai
 - **launch agents missing** — `runpool up` refuses on the first plist it cannot find. Fix: `runpool rewrite-agents`.
 - **an org pool with no watched repositories** — it never autoscales. Fix: give it `--watch` and `runpool apply`.
 - **an org pool watching only some of its repositories** — a note rather than a failure, because a repository may legitimately route its jobs elsewhere and nothing readable tells the difference. A job queued by an unwatched one waits until a watched one happens to wake the pool. **`doctor` makes a stale list audible; it does not maintain one.** The list stays hand-maintained, so a repository added to the organisation is still a change somebody has to make here too.
+- **runner(s) started before graceful shutdown was available** — a note, not a failure. The pool runs and takes work normally; only `--drain` is affected, and it refuses safely rather than killing the job. Fix: `runpool rewrite-agents`, then let the pool cycle. **This is how to check drain readiness without attempting a drain**, which on a busy pool means risking real jobs to answer a question.
 - **disk, config permissions, the organisation's runner-group setting** — each with its own remedy. None of these stops a job being picked up, but they are the things nothing else ever looks at.
 
 **Two situations `doctor` deliberately reports as healthy, because they are.**

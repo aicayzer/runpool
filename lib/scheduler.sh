@@ -226,7 +226,7 @@ _rp_doctor() {
 
   local gh_ok=1 pools=0 seen_orgs="" p running gh reg online
   local tick clean i missing avail_kb cache_avail_kb free mode other phase hook_fails
-  local all_repos unwatched
+  local all_repos unwatched drain_stale
 
   _rp_doctor_fails=0
   _rp_doctor_warns=0
@@ -391,6 +391,28 @@ _rp_doctor() {
           _rp_doctor_ok "${p}: every repository at ${POOL_TARGET} is watched"
         fi
       fi
+    fi
+
+    # "Would a drain work here?" is the question an operator has after every
+    # upgrade, and without this the only way to answer it is to attempt the
+    # very thing being checked — on a busy pool, with real jobs at stake.
+    #
+    # Reported rather than failed: a pool whose runners predate the graceful
+    # shutdown setting is running perfectly well and picking up work. Nothing
+    # is wrong until someone tries to drain it, and the drain itself refuses
+    # safely. This exists so they do not have to find out that way.
+    drain_stale=""
+    i=1
+    while [ "${i}" -le "${POOL_COUNT}" ]; do
+      if _rp_agent_loaded "$(_rp_label "${p}" "${i}")" && \
+         ! _rp_agent_traps_signals "$(_rp_label "${p}" "${i}")"; then
+        drain_stale="${drain_stale}${drain_stale:+, }${i}"
+      fi
+      i=$(( i + 1 ))
+    done
+    if [ -n "${drain_stale}" ]; then
+      _rp_doctor_note "${p}: runner(s) ${drain_stale} started before graceful shutdown was available, so '--drain' will refuse on them. They run and take work normally; only draining is affected."
+      _rp_doctor_note "${p}: fix: 'runpool rewrite-agents', then let the pool cycle — the idle sweep does this on its own, or 'runpool down ${p}' once it is idle."
     fi
 
     # The reconfiguration lock now refuses `up` and is skipped by autoscale, so

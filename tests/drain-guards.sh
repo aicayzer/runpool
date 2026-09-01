@@ -233,4 +233,40 @@ case "${out}" in
   *) fail "successful drain did not report completion: ${out}" ;;
 esac
 
+# --- doctor answers "would a drain work here" ---------------------------------
+# The predicate doctor reports on. Without it the only way to find out is to
+# attempt the drain, which is the thing being checked.
+type_probe() (
+  export RUNPOOL_BASE="${base_dir}" RUNPOOL_CACHE_DIR="${scratch_dir}/cache" \
+         RUNPOOL_CONFIG=/dev/null RUNPOOL_POOLS_FILE="${scratch_dir}/config/pools" \
+         RUNPOOL_LOG_DIR="${scratch_dir}/logs" RUNPOOL_LOG="${scratch_dir}/logs/runpool.log"
+  # shellcheck source=/dev/null
+  . "${repo_dir}/lib/common.sh" >/dev/null 2>&1
+  eval "$1"
+)
+
+# An agent that is not loaded cannot be mid-job, so it is not reported.
+type_probe '_rp_agent_loaded() { return 1; }
+            _rp_agent_traps_signals() { return 1; }
+            _rp_agent_loaded x && exit 1
+            exit 0' || fail "an unloaded agent should not be reported as un-drainable"
+ok
+
+# The two states doctor distinguishes.
+type_probe '_rp_agent_traps_signals() { return 0; }; _rp_agent_traps_signals x' \
+  || fail "a trapping agent was not recognised"
+ok
+type_probe '_rp_agent_traps_signals() { return 1; }; _rp_agent_traps_signals x' \
+  && fail "a non-trapping agent was recognised as trapping"
+ok
+
+# doctor must report it rather than fail it: such a pool runs and takes work
+# perfectly well, and only draining is affected.
+grep -q "only draining is affected" "${repo_dir}/lib/scheduler.sh" \
+  || fail "doctor does not say that a non-drainable pool still works normally"
+ok
+grep -B4 "only draining is affected" "${repo_dir}/lib/scheduler.sh" | grep -q "_rp_doctor_note" \
+  || fail "drain readiness should be a note, not a failure"
+ok
+
 echo "ok: ${pass} case(s)"
