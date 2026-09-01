@@ -57,7 +57,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | `status [--json] [--local]` | Local state alongside what GitHub actually sees |
 | `doctor` | Why is nothing picking this up. Reports; changes nothing |
 | `pools` | List registered pools |
-| `stats [--queue]` | What jobs cost, from recorded telemetry. `--queue` adds the wait before each job started |
+| `stats [--queue] [--days N \| --all]` | What jobs cost, from recorded telemetry. `--queue` adds the wait before each job started, over the last 7 days unless widened |
 | `pause [pool]` / `resume [pool]` | Global kill switch, or persistent per-pool pause |
 | `reregister <pool>` | Recreate GitHub registrations, keeping the local install |
 | `rewrite-agents` | Regenerate the launch agents after changing hook settings |
@@ -73,6 +73,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 Three commands earn a note beyond the table:
 
 - **A busy pool is resized with `--drain`.** Both `set-count` and `down` refuse by default while a job is running, because stopping a runner mid-job fails that job. On a pool that is serving work continuously that refusal has no way through, and the pool most likely to need resizing is the busy one. `--drain` stops the runners accepting new jobs, waits for the ones already running to finish, and then proceeds. The wait is bounded by `RUNPOOL_DRAIN_TIMEOUT`, and it reports what it is still waiting for rather than going quiet. It is opt-in because a command that silently blocks for an hour is worse than one that refuses.
+- **The pools file is intent; the running pool is state.** `set-count` changes the pool and deliberately does not write the file, so the two disagree after any resize. That is the normal condition between them rather than a fault: the file records the shape you want a machine to have and is what you copy between machines, while the pool records what is running right now. `apply` is where they are reconciled, and it resolves the difference in the file's favour, so `apply --dry-run` first is not a formality. A `count 3 -> 4` line in that plan is the drift, and applying it would undo a deliberate resize.
 - **`set-count` is absolute, so a caller that reads a count and acts on it later needs `--if-count`.** A pool changed in between turns a growth into a shrink, and shrinking deregisters runners. `--if-count M` refuses unless the pool is still at M, and one resize per pool runs at a time so two callers cannot interleave. A runner deregistered locally that GitHub still holds is reported as a failure, not logged and passed over: a stale registration attracts jobs that then queue forever.
 - **`status --json --local` skips the GitHub query**, reporting those fields as `null`. The root `paused` field is the global kill switch; every pool also carries its own additive `paused` field. Anything refreshing on a timer should use `--local`, since one API call per pool per minute is thousands a day and makes a passive readout fail whenever the network does.
 - **`doctor` answers "why is nothing picking this up" in one command.** It checks `gh` and its authentication, that GitHub still holds the registrations, that the launch agents exist, and then disk headroom, config permissions and the organisation's runner-group setting. Each failure comes with what to do about it, and it exits non-zero when something is actually wrong. It repairs nothing, so it is safe at any moment including mid-job.
@@ -137,6 +138,7 @@ Start and stop pools, change runner counts, disable local CI and see what is run
 - **A runner can look healthy while GitHub has dropped it.** GitHub prunes registrations that have not connected for a long time. The local install still starts and connects and then picks up nothing, so jobs queue forever against a pool reporting as running. That is what the `github` column in `status` is for, and `reregister` fixes it.
 - **`services:` and `container:` do not force a hosted runner.** Those two workflow keys are Linux-only, but an ordinary `docker run` inside a step works anywhere Docker does, including here.
 - **More runners is not obviously more throughput.** `runpool stats --queue` gives the wait before each job started, which is the figure that moves when capacity changes. Read it with the qualifier it prints: a wait can be a cold pool waking or a dependency that has not finished, and neither is fixed by more runners.
+- **`--queue` costs one API call per run, so it covers the last 7 days by default.** A busy machine accumulates thousands of runs, and joining all of them unbounded takes longer than anyone waits. `--days N` widens or narrows the window and `--all` removes it; the join says how many runs it is fetching and marks each one off, so a long join never looks like a stuck one.
 
 ## Not on a Mac?
 

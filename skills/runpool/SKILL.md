@@ -150,6 +150,8 @@ runpool set-count <pool> 2 --drain         # let running jobs finish first
 runpool down <pool> --drain                # same, without resizing
 ```
 
+**The pools file is intent; the running pool is state.** `set-count` changes the pool and does not write the file, so they disagree after any resize. This is by design, not drift to repair: the file is the shape you want and what you copy between machines, the pool is what is running now, and `apply` reconciles them in the file's favour. Always `apply --dry-run` first and read the plan — a `count` line in it is a deliberate resize about to be undone.
+
 **`set-count` writes an absolute number, so anything that read the count earlier must pass `--if-count`.** Between the read and the write the pool may have moved, and a command meant to grow it then shrinks it instead, deregistering runners that setting the number back does not restore. Pass the count you read as `--if-count` and the resize is refused rather than guessed at. One resize per pool runs at a time, so two callers cannot interleave.
 
 A deregistration that fails is reported as a failure, not passed over. A registration GitHub still holds for a runner that no longer exists attracts jobs that queue forever, so if a resize reports orphaned runners, clear them before moving on.

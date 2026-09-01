@@ -27,12 +27,34 @@
 # whether a wait was a shortage of runners. Reconstructing that needs the
 # timestamps.
 #
-# Usage:  telemetry-join.sh [path/to/jobs.jsonl] > joined.tsv
+# One API call per run, so the run count is the cost. That cost is bounded two
+# ways: only runs inside the window are fetched, and the calls run in parallel.
+# Unbounded and serial, a year of telemetry is not slow but unfinishable, and a
+# command with no output is indistinguishable from a hung one while it happens.
+#
+# Usage:  telemetry-join.sh [path/to/jobs.jsonl] [--days N | --all] > joined.tsv
+# Env:    RUNPOOL_JOIN_JOBS   concurrent API calls (default 8)
 # Needs:  gh, authenticated. Reads GitHub; changes nothing anywhere.
 
 set -euo pipefail
 
-TELEMETRY="${1:-}"
+TELEMETRY=""
+DAYS=7
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --all)  DAYS=0 ;;
+    --days) shift; DAYS="${1:-}"
+            case "${DAYS}" in
+              ''|*[!0-9]*) echo "--days needs a whole number of days" >&2; exit 1 ;;
+            esac
+            [ "${DAYS}" -gt 0 ] || { echo "--days needs a number above zero (use --all for no limit)" >&2; exit 1; } ;;
+    --*)    echo "unknown flag: $1 (usage: telemetry-join.sh [file] [--days N | --all])" >&2; exit 1 ;;
+    *)      TELEMETRY="$1" ;;
+  esac
+  shift
+done
+
 if [ -z "${TELEMETRY}" ]; then
   TELEMETRY="$(runpool status --json --local 2>/dev/null \
     | sed -n 's/.*"telemetry":"\([^"]*\)".*/\1/p')"
@@ -75,15 +97,46 @@ awk '
   }
 ' "${TELEMETRY}" | sort > "${work}/local.tsv"
 
+# --- window: a run outside it is dropped before it can cost an API call
+if [ "${DAYS}" -gt 0 ]; then
+  cutoff=$(( $(date +%s) - DAYS * 86400 ))
+  awk -F'\t' -v c="${cutoff}" '$11 >= c' "${work}/local.tsv" > "${work}/windowed.tsv"
+  mv "${work}/windowed.tsv" "${work}/local.tsv"
+fi
+
 # --- remote side: created and started, per runner, per run
+#
+# Each worker writes its own file rather than a shared pipe: concurrent writers
+# interleave mid-line, and a torn row here would silently corrupt the join.
 awk -F'\t' '{split($1, p, "|"); print $3 "\t" p[1]}' "${work}/local.tsv" \
-  | sort -u | while IFS=$(printf '\t') read -r repo run_id; do
-  [ -n "${run_id}" ] || continue
-  gh api "repos/${repo}/actions/runs/${run_id}/jobs" --paginate \
-    --jq ".jobs[] | [\"${run_id}|\" + .runner_name,
+  | sort -u > "${work}/runs.tsv"
+total="$(grep -c . "${work}/runs.tsv" || true)"
+jobs="${RUNPOOL_JOIN_JOBS:-8}"
+
+if [ "${DAYS}" -gt 0 ]; then
+  printf 'Joining %s run(s) from the last %s day(s), %s calls at a time.\n' \
+    "${total}" "${DAYS}" "${jobs}" >&2
+else
+  printf 'Joining all %s run(s), %s calls at a time.\n' "${total}" "${jobs}" >&2
+fi
+
+mkdir -p "${work}/out"
+export JOIN_OUT="${work}/out"
+_join_fetch() {
+  gh api "repos/$1/actions/runs/$2/jobs" --paginate \
+    --jq ".jobs[] | [\"$2|\" + .runner_name,
                      (.created_at | fromdateiso8601),
-                     (.started_at | fromdateiso8601)] | @tsv" 2>/dev/null || true
-done | sort > "${work}/remote.tsv"
+                     (.started_at | fromdateiso8601)] | @tsv" \
+    > "${JOIN_OUT}/$2" 2>/dev/null || true
+  printf '.' >&2
+}
+export -f _join_fetch
+
+if [ "${total}" -gt 0 ]; then
+  xargs -P "${jobs}" -n2 bash -c '_join_fetch "$0" "$1"' < "${work}/runs.tsv"
+  printf '\n' >&2
+fi
+find "${work}/out" -type f -exec cat {} + 2>/dev/null | sort > "${work}/remote.tsv"
 
 # --- join, then keep one remote row per local job
 #

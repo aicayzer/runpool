@@ -44,3 +44,5 @@ jobs:
         run: tests/watch-list-staleness.sh
       - name: drain guards
         run: tests/drain-guards.sh
+      - name: stats queue window
+        run: tests/stats-queue-window.sh
