@@ -82,18 +82,29 @@ _rp_stats_have_data() {
 }
 
 _rp_stats() {
-  local arg queue=0 f
-  for arg in "$@"; do
-    case "${arg}" in
+  local queue=0 f window=""
+  # --days and --all only mean anything to the join, so they imply --queue
+  # rather than being silently accepted and ignored by the local table.
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
       --queue) queue=1 ;;
-      *) _rp_err "unknown flag: ${arg} (usage: runpool stats [--queue])"; return 1 ;;
+      --all)   queue=1; window="--all" ;;
+      --days)
+        shift
+        case "${1:-}" in
+          ''|*[!0-9]*) _rp_err "--days needs a whole number of days"; return 1 ;;
+        esac
+        [ "$1" -gt 0 ] || { _rp_err "--days needs a number above zero (use --all for no limit)"; return 1; }
+        queue=1; window="--days $1" ;;
+      *) _rp_err "unknown flag: $1 (usage: runpool stats [--queue [--days N | --all]])"; return 1 ;;
     esac
+    shift
   done
   f="$(_rp_stats_file)"
   # Missing data is explained, not an error: nothing is wrong with a machine
   # that has not switched telemetry on.
   _rp_stats_have_data "${f}" || return 0
-  if [ "${queue}" = "1" ]; then _rp_stats_queue "${f}"; else _rp_stats_local "${f}"; fi
+  if [ "${queue}" = "1" ]; then _rp_stats_queue "${f}" ${window}; else _rp_stats_local "${f}"; fi
 }
 
 _rp_stats_local() {
@@ -140,6 +151,7 @@ EOF
   echo "hook cannot see:"
   echo ""
   echo "  runpool stats --queue           median and p90 queue time, per job"
+  echo "  runpool stats --queue --all     the same, over every record kept"
   echo "  contrib/telemetry-join.sh       one row per job, everything joined"
   echo ""
   echo "  records: ${f}"
@@ -164,7 +176,8 @@ EOF
 # run-level rather than job-level — and a second copy is a second place to get
 # them wrong.
 _rp_stats_queue() {
-  local f="$1" join joined rows n key median p90 runs
+  local f="$1"; shift
+  local join joined rows n key median p90 runs
   _rp_require gh || return 1
 
   # RUNPOOL_ROOT is resolved by bin/runpool, following symlinks, and is visible
@@ -176,12 +189,14 @@ _rp_stats_queue() {
     return 1
   }
 
-  echo "Joining the local records to GitHub: one API call per run, so give it a moment."
-  echo ""
+  # stderr is deliberately not swallowed: the join reports how many runs it is
+  # fetching and prints a dot per call. Without that, a command that is working
+  # and a command that is stuck look exactly the same from here.
+  #
   # The telemetry path is passed explicitly. Left to work it out, the script
   # falls back to `runpool status --json --local` and picks up whatever runpool
   # is on PATH, which is not necessarily the one being run.
-  joined="$("${join}" "${f}" 2>/dev/null)" || {
+  joined="$("${join}" "${f}" "$@")" || {
     _rp_err "the join failed — run '${join} ${f}' directly to see why"
     return 1
   }
@@ -196,8 +211,10 @@ _rp_stats_queue() {
   if [ "${n}" -eq 0 ]; then
     echo "The join produced no rows."
     echo ""
-    echo "Every record has to match a job GitHub still has, and run history is"
-    echo "kept for a limited time, so records older than that no longer join."
+    echo "The join covers the last 7 days unless told otherwise, so the first"
+    echo "thing to try is a wider window: 'runpool stats --queue --all'. Beyond"
+    echo "that, every record has to match a job GitHub still has, and run"
+    echo "history is kept for a limited time, so older records no longer join."
     echo "Run it directly to see what came back:"
     echo ""
     echo "  ${join} ${f}"
