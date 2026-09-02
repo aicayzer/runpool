@@ -1,6 +1,6 @@
 <img src="assets/icon.png" width="88" alt="">
 
-# RunPool: self-hosted GitHub Actions runner pools for macOS
+# RunPool: self-hosted GitHub Actions runners for macOS
 
 [![CI](https://github.com/aicayzer/runpool/actions/workflows/ci.yml/badge.svg)](https://github.com/aicayzer/runpool/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/aicayzer/runpool)](https://github.com/aicayzer/runpool/releases)
