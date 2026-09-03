@@ -677,7 +677,7 @@ _rp_migrate_storage() {
   # shellcheck disable=SC2034  # read by lib/common.sh helpers below
   RUNPOOL_STATE_DIR="${RUNPOOL_BASE}/state"
   # shellcheck disable=SC2034  # read by lib/common.sh helpers below
-  RUNPOOL_POOL_PAUSE_DIR="${RUNPOOL_STATE_DIR}/pools"
+  RUNPOOL_POOL_STATE_DIR="${RUNPOOL_STATE_DIR}/pools"
   _rp_rewrite_plists || return 1
   _rp_log "Migrated storage to ${target}. Legacy data remains at ${source}."
   _rp_log "Verify with: runpool status --local && runpool doctor"
@@ -714,6 +714,7 @@ _rp_up() {
     i=$(( i + 1 ))
   done
   _rp_touch_activity
+  _rp_touch_pool_started "$1"
   _rp_log "Started pool '$1' (${loaded} of ${POOL_COUNT} runners online)."
 }
 

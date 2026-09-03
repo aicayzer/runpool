@@ -67,27 +67,38 @@ _rp_notify() {
 # once, and 'runpool status' only surfaces it if somebody thinks to look.
 #
 # Checked at most hourly, because it costs one API call per pool.
+#
+# The judgement itself is _rp_gh_state and is deliberately not repeated here.
+# An earlier version of this function inlined its own copy of the conditions,
+# which drifted: it had no notion of a pool that has only just started, so a
+# tick that brought a pool up and then health-checked it two seconds later
+# reported a healthy start as a critical outage. Three of the four alerts this
+# check ever sent were that race.
 _rp_health_check() {
-  local now last p gh reg online
+  local now last p gh reg online running settling
   now=$(_rp_now); last=$(cat "${RUNPOOL_HEALTH_STATE}" 2>/dev/null || echo 0)
   [ $(( now - last )) -lt 3600 ] && return 0
   echo "${now}" >| "${RUNPOOL_HEALTH_STATE}"
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
     gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
-    [ "${reg}" = "?" ] && continue   # GitHub unreachable is not a pool fault
-    if [ "${reg}" = "0" ]; then
-      _rp_notify critical \
-        "Pool '${p}' is not registered with GitHub" \
-        "runpool/unregistered/${p}" \
-        "GitHub has no runners for this pool, so any job routed to it will queue forever. Registrations are pruned after a long idle period." \
-        "\"Pool\":\"${p}\",\"Target\":\"${POOL_TARGET}\",\"Fix\":\"runpool reregister ${p}\""
-    elif [ "$(_rp_running_in "${p}" "${POOL_COUNT}")" -gt 0 ] && [ "${online}" = "0" ]; then
-      _rp_notify critical \
-        "Pool '${p}' is running but not reaching GitHub" \
-        "runpool/offline/${p}" \
-        "The runners started but none has connected. Jobs will queue against a pool that looks healthy locally." \
-        "\"Pool\":\"${p}\",\"Target\":\"${POOL_TARGET}\",\"Registered\":\"${reg}\",\"Online\":\"${online}\""
-    fi
+    running="$(_rp_running_in "${p}" "${POOL_COUNT}")"
+    settling=0; _rp_pool_settling "${p}" && settling=1
+    # unreachable, starting, miscount and ok all fall through: none of them is
+    # a pool fault a person needs waking for.
+    case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}" "${settling}")" in
+      unregistered)
+        _rp_notify critical \
+          "Pool '${p}' is not registered with GitHub" \
+          "runpool/unregistered/${p}" \
+          "GitHub has no runners for this pool, so any job routed to it will queue forever. Registrations are pruned after a long idle period." \
+          "\"Pool\":\"${p}\",\"Target\":\"${POOL_TARGET}\",\"Fix\":\"runpool reregister ${p}\"" ;;
+      offline)
+        _rp_notify critical \
+          "Pool '${p}' is running but not reaching GitHub" \
+          "runpool/offline/${p}" \
+          "The runners started but none has connected. Jobs will queue against a pool that looks healthy locally." \
+          "\"Pool\":\"${p}\",\"Target\":\"${POOL_TARGET}\",\"Registered\":\"${reg}\",\"Online\":\"${online}\"" ;;
+    esac
   done
 }

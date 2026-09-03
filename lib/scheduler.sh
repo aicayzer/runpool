@@ -22,6 +22,7 @@ _rp_gh_runners() {
 #
 #   unreachable   GitHub could not be asked, so nothing here is a pool fault
 #   unregistered  GitHub has no runners at all — jobs queue forever
+#   starting      the same shape as 'offline', but the pool came up moments ago
 #   offline       runners are up locally and none has reached GitHub
 #   miscount      GitHub's count differs from what the pool expects
 #   ok
@@ -34,11 +35,17 @@ _rp_gh_runners() {
 # The order is load-bearing: '?' has to be tested before anything treats these
 # as numbers, and 'unregistered' before 'miscount', which would otherwise
 # swallow it.
+# 'starting' exists because a runner reaches GitHub a second or two after
+# launchd starts it, so for that moment a healthy pool is indistinguishable
+# from a broken one on these numbers alone. The caller passes whether the pool
+# is inside its settling window; only the age separates the two.
 #   $1 registered  $2 online  $3 running locally  $4 expected count
+#   $5 settling (1 while inside the window, 0 or absent otherwise)
 _rp_gh_state() {
   if   [ "$1" = "?" ];                       then echo unreachable
   elif [ "$1" = "0" ];                       then echo unregistered
-  elif [ "$3" -gt 0 ] && [ "$2" = "0" ];     then echo offline
+  elif [ "$3" -gt 0 ] && [ "$2" = "0" ]; then
+    if [ "${5:-0}" = "1" ]; then echo starting; else echo offline; fi
   elif [ "$1" != "$4" ];                     then echo miscount
   else                                            echo ok
   fi
@@ -59,7 +66,7 @@ _rp_running_in() {
 # cleanly, looks healthy in every local check, and picks up nothing. Reporting
 # only the local view hid exactly that for three weeks.
 _rp_status() {
-  local as_json=0 local_only=0 arg total_running=0 total_busy=0 p running busy gh reg online gh_display note warn=0
+  local as_json=0 local_only=0 arg total_running=0 total_busy=0 p running busy gh reg online gh_display note settling warn=0
   for arg in "$@"; do
     case "${arg}" in
       --json)  as_json=1 ;;
@@ -85,9 +92,11 @@ _rp_status() {
       gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
       gh_display="${online}/${reg}"
       note=""
-      case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}")" in
+      settling=0; _rp_pool_settling "${p}" && settling=1
+      case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}" "${settling}")" in
         unreachable)  gh_display="unreachable" ;;
         unregistered) note="  (not registered; jobs will queue)"; warn=1 ;;
+        starting)     note="  (just started; still connecting)" ;;
         offline)      note="  (started but not connected)"; warn=1 ;;
         miscount)     note="  (pool expects ${POOL_COUNT})" ;;
       esac
@@ -224,7 +233,7 @@ _rp_doctor_fail() {
 _rp_doctor() {
   [ $# -eq 0 ] || { _rp_err "doctor takes no arguments (usage: runpool doctor)"; return 1; }
 
-  local gh_ok=1 pools=0 seen_orgs="" p running gh reg online
+  local gh_ok=1 pools=0 seen_orgs="" p running gh reg online settling
   local tick clean i missing avail_kb cache_avail_kb free mode other phase hook_fails
   local all_repos unwatched drain_stale
 
@@ -448,9 +457,12 @@ _rp_doctor() {
       continue
     fi
     gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
-    case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}")" in
+    settling=0; _rp_pool_settling "${p}" && settling=1
+    case "$(_rp_gh_state "${reg}" "${online}" "${running}" "${POOL_COUNT}" "${settling}")" in
       unreachable)
         _rp_doctor_note "${p}: github could not be reached, so only local state is known: ${running}/${POOL_COUNT} running" ;;
+      starting)
+        _rp_doctor_note "${p}: started within the last ${RUNPOOL_SETTLE_SECS}s and has not reached github yet, which is normal; re-run doctor if it persists" ;;
       unregistered)
         _rp_doctor_fail "${p}: github has no runners registered for ${POOL_TARGET}, so every job routed here queues forever" \
                         "fix: runpool reregister ${p}   (github prunes registrations after a long idle spell)" ;;

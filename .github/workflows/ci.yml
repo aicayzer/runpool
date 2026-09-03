@@ -48,3 +48,5 @@ jobs:
         run: tests/stats-queue-window.sh
       - name: scheduler agent path
         run: tests/scheduler-agent-path.sh
+      - name: pool settling window
+        run: tests/pool-settling-window.sh

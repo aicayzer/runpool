@@ -37,6 +37,13 @@
 # grace only avoids churn between rapid pushes in one working session.
 # RUNPOOL_IDLE_SECS=1200
 
+# How long after a pool starts before its runners are expected to have reached
+# GitHub. A runner opens its connection a second or two after launchd starts
+# it, and inside that window a healthy pool looks exactly like a broken one:
+# agents running locally, nothing online at GitHub. Reachability is not judged
+# until the window passes. Raise it if this machine starts runners slowly.
+# RUNPOOL_SETTLE_SECS=120
+
 # Load threshold exposed in structured status. It does not send an alert.
 # Defaults to six times core count, which sits clear of ordinary work.
 # Raise this as the pool grows: a busy pool of N runners reaches about N times
