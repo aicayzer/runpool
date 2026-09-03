@@ -107,7 +107,7 @@ RUNPOOL_HOOK_DIR="${RUNPOOL_HOOK_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/runpoo
 RUNPOOL_LOG="${RUNPOOL_LOG_DIR}/runpool.log"
 RUNPOOL_ACTIVITY="${RUNPOOL_STATE_DIR}/activity"
 RUNPOOL_PAUSE_FLAG="${RUNPOOL_STATE_DIR}/paused"
-RUNPOOL_POOL_PAUSE_DIR="${RUNPOOL_STATE_DIR}/pools"
+RUNPOOL_POOL_STATE_DIR="${RUNPOOL_STATE_DIR}/pools"
 # shellcheck disable=SC2034  # read by lib/scheduler.sh
 RUNPOOL_LAST_CLEAN="${RUNPOOL_STATE_DIR}/last-clean"
 
@@ -127,6 +127,13 @@ RUNPOOL_LABEL_NS="${RUNPOOL_LABEL_NS:-runpool}"
 # Restarting a runner is cheap and needs no re-registration, so a short grace
 # only avoids churn between rapid pushes inside one working session.
 RUNPOOL_IDLE_SECS="${RUNPOOL_IDLE_SECS:-1200}"
+
+# How long after a pool starts before its runners are expected to have reached
+# GitHub. A runner authenticates and opens its long poll a second or two after
+# launchd starts it, and until that lands the pool looks exactly like a broken
+# one: agents up locally, nothing online at GitHub. Judging a pool inside that
+# window reports every healthy start as an outage.
+RUNPOOL_SETTLE_SECS="${RUNPOOL_SETTLE_SECS:-120}"
 
 # How long `--drain` waits for running jobs to finish before giving up.
 #
@@ -160,7 +167,7 @@ RUNPOOL_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 RUNPOOL_TELEMETRY="${RUNPOOL_TELEMETRY:-0}"
 
 mkdir -p "${RUNPOOL_POOL_DIR}" "${RUNPOOL_RUNNER_DIR}" "${RUNPOOL_AGENT_DIR}" \
-         "${RUNPOOL_STATE_DIR}" "${RUNPOOL_POOL_PAUSE_DIR}" "${RUNPOOL_CACHE_DIR}" \
+         "${RUNPOOL_STATE_DIR}" "${RUNPOOL_POOL_STATE_DIR}" "${RUNPOOL_CACHE_DIR}" \
          "${RUNPOOL_LOG_DIR}" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
@@ -361,8 +368,20 @@ _rp_runner_busy() {
 _rp_touch_activity() { _rp_now >| "${RUNPOOL_ACTIVITY}"; }
 
 _rp_paused() { [ -f "${RUNPOOL_PAUSE_FLAG}" ]; }
-_rp_pool_pause_flag() { echo "${RUNPOOL_POOL_PAUSE_DIR}/$1.paused"; }
+_rp_pool_pause_flag() { echo "${RUNPOOL_POOL_STATE_DIR}/$1.paused"; }
 _rp_pool_paused() { [ -f "$(_rp_pool_pause_flag "$1")" ]; }
+
+# When a pool was last brought up, and whether that was recent enough that
+# GitHub cannot yet be expected to have seen it. '>|' for the same noclobber
+# reason as the activity stamp above.
+_rp_pool_started_flag() { echo "${RUNPOOL_POOL_STATE_DIR}/$1.started"; }
+_rp_touch_pool_started() { _rp_now >| "$(_rp_pool_started_flag "$1")"; }
+_rp_pool_settling() {
+  local started
+  started=$(cat "$(_rp_pool_started_flag "$1")" 2>/dev/null || echo 0)
+  case "${started}" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( $(_rp_now) - started )) -lt "${RUNPOOL_SETTLE_SECS}" ]
+}
 
 _rp_runner_cache_dir() { echo "${POOL_CACHE_DIR}/runner-$2"; }
 _rp_runner_work_dir() {
