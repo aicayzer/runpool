@@ -1,0 +1,240 @@
+name: Release
+
+# Cutting a release is one action: an annotated tag, pushed.
+#
+#   git tag -a v0.10.4      # the message is the release notes, see verify below
+#   git push origin v0.10.4
+#
+# Everything else happens here: the checks that gate main run again, a source
+# tarball is attached to a GitHub release, and the Homebrew formula in the tap
+# is bumped to point at it.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Hosted runners throughout, for the same reason ci.yml gives: this
+    # repository is public, and the tool it builds refuses to wire a public
+    # repo to a self-hosted pool. It would be absurd to break its own rule.
+    #
+    # This job is deliberately first and deliberately cheap. Both failures it
+    # catches are string comparisons, and catching them here means a bad tag
+    # costs seconds rather than a macOS runner.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The tag object itself is needed, not just the commit it points at.
+          fetch-depth: 0
+
+      - name: the tag and the version must agree
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # RUNPOOL_VERSION in bin/runpool is the only place a version is
+          # written. The tag is a claim about it, checked here, because a tag
+          # without a matching bump ships a binary that misreports itself.
+          declared="$(sed -n 's/^RUNPOOL_VERSION="\(.*\)"$/\1/p' bin/runpool)"
+          if [ -z "${declared}" ]; then
+            echo "::error::could not read RUNPOOL_VERSION from bin/runpool"
+            exit 1
+          fi
+          if [ "${tag}" != "v${declared}" ]; then
+            echo "::error::tag ${tag} does not match RUNPOOL_VERSION=${declared} in bin/runpool"
+            echo "Bump the constant, commit it, then move the tag:"
+            echo "  git tag -d ${tag} && git push --delete origin ${tag}"
+            echo "  git tag -a ${tag} && git push origin ${tag}"
+            exit 1
+          fi
+          echo "ok  ${tag} matches RUNPOOL_VERSION=${declared}"
+
+      - name: the tag must carry the release notes
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # The annotation is the single source of the release notes. There is
+          # no CHANGELOG.md by design and nothing is generated, so a lightweight
+          # tag would publish a release with nothing to read. cat-file is the
+          # honest test: for-each-ref quietly falls through to the commit
+          # message on a lightweight tag, which would look like it worked.
+          if [ "$(git cat-file -t "refs/tags/${tag}")" != "tag" ]; then
+            echo "::error::${tag} is a lightweight tag and carries no release notes"
+            echo "The tag message is the release notes. Re-cut it annotated:"
+            echo "  git tag -d ${tag} && git push --delete origin ${tag}"
+            echo "  git tag -a ${tag} && git push origin ${tag}"
+            exit 1
+          fi
+          if [ -z "$(git tag -l --format='%(contents:subject)' "${tag}")" ]; then
+            echo "::error::${tag} is annotated but its message is empty"
+            exit 1
+          fi
+          echo "ok  ${tag} carries an annotation"
+
+  ci:
+    needs: verify
+    # A tag can be pushed at any commit, including one that never passed CI.
+    # Calling ci.yml rather than restating its steps is what keeps the release
+    # gate and the main gate the same set of checks.
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha256: ${{ steps.tarball.outputs.sha256 }}
+      tarball: ${{ steps.tarball.outputs.name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: build the source tarball
+        id: tarball
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          name="runpool-${version}.tar.gz"
+          # An uploaded asset rather than GitHub's archive/refs/tags URL. Those
+          # are generated on demand and their checksums are not contractually
+          # stable; a formula pinning one has been broken that way before.
+          # Hashing bytes we upload ourselves removes the class entirely.
+          # gzip -n drops the timestamp, so the same tag always builds the same
+          # tarball and the recorded sha256 stays explicable.
+          git archive --format=tar --prefix="runpool-${version}/" "${tag}" \
+            | gzip -n -9 >| "${name}"
+          sha="$(sha256sum "${name}" | cut -d' ' -f1)"
+          {
+            echo "name=${name}"
+            echo "sha256=${sha}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "built ${name}"
+          echo "sha256 ${sha}"
+
+      - name: take the release notes from the tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # subject then body, rather than %(contents), so a signature block
+          # never lands in the notes.
+          {
+            git tag -l --format='%(contents:subject)' "${tag}"
+            body="$(git tag -l --format='%(contents:body)' "${tag}")"
+            if [ -n "${body}" ]; then
+              echo
+              printf '%s\n' "${body}"
+            fi
+          } >| notes.md
+          echo "--- notes.md ---"
+          cat notes.md
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARBALL: ${{ steps.tarball.outputs.name }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          name="${TARBALL}"
+          # Idempotent, so re-running the whole workflow after a failure
+          # further down does not dead-end on an existing release.
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "release ${tag} exists, updating it"
+            gh release edit "${tag}" --notes-file notes.md
+            gh release upload "${tag}" "${name}" --clobber
+          else
+            gh release create "${tag}" "${name}" \
+              --title "${tag}" \
+              --notes-file notes.md \
+              --verify-tag
+          fi
+
+  tap:
+    needs: [release]
+    # macOS because the gate is brew itself: the formula is audited, built and
+    # tested here before anything is pushed, which is what the manual release
+    # checklist did by hand.
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: require the tap credential
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "::error::secrets.TAP_TOKEN is not set"
+            echo "A fine-grained PAT with Contents: write on the tap repository only."
+            exit 1
+          fi
+
+      - name: tap the formula repository
+        run: |
+          # Let brew clone it, so the working copy is already where brew
+          # expects a tap to live and can be audited and installed in place.
+          brew tap aicayzer/tap
+          brew --repo aicayzer/tap
+
+      - name: point the formula at this release
+        env:
+          SHA256: ${{ needs.release.outputs.sha256 }}
+          TARBALL: ${{ needs.release.outputs.tarball }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          tap="$(brew --repo aicayzer/tap)"
+          formula="${tap}/Formula/runpool.rb"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${TARBALL}"
+
+          python3 - "${formula}" "${url}" "${SHA256}" <<'PY'
+          import re, sys
+          path, url, sha = sys.argv[1:4]
+          src = open(path).read()
+          out, n_url = re.subn(r'^(\s*url\s+)"[^"]*"', lambda m: m.group(1) + '"%s"' % url,
+                               src, count=1, flags=re.M)
+          out, n_sha = re.subn(r'^(\s*sha256\s+)"[^"]*"', lambda m: m.group(1) + '"%s"' % sha,
+                               out, count=1, flags=re.M)
+          if n_url != 1 or n_sha != 1:
+              sys.exit("could not rewrite url/sha256 in %s" % path)
+          open(path, "w").write(out)
+          PY
+
+          git -C "${tap}" --no-pager diff -- Formula/runpool.rb
+
+      - name: audit, build and test the formula
+        run: |
+          # In this order on purpose: nothing is pushed until brew has actually
+          # installed and exercised the formula as edited.
+          brew audit --strict aicayzer/tap/runpool
+          brew install --build-from-source aicayzer/tap/runpool
+          brew test aicayzer/tap/runpool
+          # The whole point of the version guard, proven against what a user
+          # will actually install rather than against the source tree.
+          got="$(runpool version)"
+          if [ "${got}" != "runpool ${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::installed binary reports '${got}', expected 'runpool ${GITHUB_REF_NAME#v}'"
+            exit 1
+          fi
+          echo "ok  ${got}"
+
+      - name: push the formula
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          tap="$(brew --repo aicayzer/tap)"
+          if git -C "${tap}" diff --quiet -- Formula/runpool.rb; then
+            echo "formula already points at ${tag}, nothing to push"
+            exit 0
+          fi
+          git -C "${tap}" config user.name "github-actions[bot]"
+          git -C "${tap}" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "${tap}" add Formula/runpool.rb
+          git -C "${tap}" commit -m "runpool ${tag}"
+          # The token goes on the remote rather than into the checkout, and the
+          # runner is thrown away after this step.
+          git -C "${tap}" remote set-url origin \
+            "https://x-access-token:${TAP_TOKEN}@github.com/aicayzer/homebrew-tap.git"
+          git -C "${tap}" push origin HEAD:main

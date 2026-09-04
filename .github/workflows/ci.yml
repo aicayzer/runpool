@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Called by release.yml so a tag runs exactly the checks that gate main.
+  # Listing them a second time over there is how the two lists drift apart.
+  workflow_call:
 
 permissions:
   contents: read
