@@ -33,6 +33,18 @@ jobs:
           # The tag object itself is needed, not just the commit it points at.
           fetch-depth: 0
 
+      - name: restore the annotated tag object
+        # actions/checkout fetches the real tag and then force-updates
+        # refs/tags/<tag> to point straight at the commit it was told to check
+        # out, which leaves a lightweight tag behind:
+        #   git fetch ... +refs/tags/*:refs/tags/*      <- the annotated object
+        #   git fetch ... +<sha>:refs/tags/<tag>        <- clobbers the ref
+        # Everything below reads the annotation, so fetch the ref back before
+        # trusting it. Without this the release notes silently become the
+        # commit message, which is precisely the failure the next step exists
+        # to catch.
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
       - name: the tag and the version must agree
         run: |
           tag="${GITHUB_REF_NAME}"
@@ -93,6 +105,18 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: restore the annotated tag object
+        # actions/checkout fetches the real tag and then force-updates
+        # refs/tags/<tag> to point straight at the commit it was told to check
+        # out, which leaves a lightweight tag behind:
+        #   git fetch ... +refs/tags/*:refs/tags/*      <- the annotated object
+        #   git fetch ... +<sha>:refs/tags/<tag>        <- clobbers the ref
+        # Everything below reads the annotation, so fetch the ref back before
+        # trusting it. Without this the release notes silently become the
+        # commit message, which is precisely the failure the next step exists
+        # to catch.
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
 
       - name: build the source tarball
         id: tarball
