@@ -128,17 +128,27 @@ The pattern is already established: configuration precedence was found and fixed
 
 ## Releases
 
-1. **Bump `RUNPOOL_VERSION` in `bin/runpool`.** It is the only place the version is written, and the formula builds from a git tag, so a tag without a matching bump ships a binary that misreports itself.
-2. Land the change on `main` with CI green.
-3. `git tag -a vX.Y.Z` and push the tag.
-4. `gh release create vX.Y.Z` with notes describing what changed for a user.
-5. Update the Homebrew formula in the tap repository: bump `url` to the new tag and recompute `sha256` from the release tarball.
-6. `brew audit --strict` and `brew test` against the formula before pushing it.
+`.github/workflows/release.yml` does the whole of it. There are two manual steps:
 
-**There is no `CHANGELOG.md`, deliberately.** The release notes on GitHub are the changelog, the README's release badge links to them, and a copy in the repo would be a second thing to forget at step 4 and a second thing to disagree with the first. Do not add one.
+1. **Bump `RUNPOOL_VERSION` in `bin/runpool`** and land it on `main` with CI green. It is the only place a version is written.
+2. **Cut an annotated tag and push it.** `git tag -a vX.Y.Z` then `git push origin vX.Y.Z`.
+
+The workflow then re-runs the checks that gate `main`, attaches a source tarball to a GitHub release, and bumps the formula in the tap to point at it. Nothing else is done by hand.
+
+**The tag message is the release notes.** There is no second copy anywhere: no `CHANGELOG.md`, nothing generated from commits, nothing typed into the GitHub UI afterwards. Write them where you cut the tag, and keep them short. A reader wants to know what changed and whether it affects them; anyone who needs more than that can read the code. **The workflow refuses a lightweight tag** for this reason, and the check is `git cat-file -t` rather than `for-each-ref`, because `for-each-ref` falls through to the *commit* message on a lightweight tag and would publish something plausible and wrong.
+
+**The tag and `RUNPOOL_VERSION` must agree, and the workflow enforces it** before spending a macOS runner. A tag without a matching bump ships a binary that misreports itself, which was previously only a line in this file asking someone to remember.
+
+**The release asset is a tarball built here, not GitHub's `archive/refs/tags` URL.** Those are generated on demand and their checksums are not contractually stable, which has broken formulae pinning them. `git archive | gzip -n` is reproducible, and the recorded `sha256` is of bytes we uploaded.
+
+**The tap is updated last, and only after `brew audit --strict`, `brew install` and `brew test` pass against the edited formula.** That ordering is deliberate: if the tap step fails you have a real release and a stale formula, which is one job re-run away from fixed. The reverse would point the tap at a release that does not exist.
+
+**`secrets.TAP_TOKEN` is a fine-grained PAT with `Contents: write` on the tap repository only.** It is the one credential in the release path. Fine-grained PATs expire, and a silent expiry means a release that publishes but never reaches the tap, so the workflow fails loudly and early when the secret is missing rather than at `git push`.
+
+**There is no `CHANGELOG.md`, deliberately.** The release notes on GitHub are the changelog and the README's release badge links to them. A copy in the repo would be a second thing to keep current and a second thing to disagree with the first. Do not add one.
 
 **The formula installs `bin/` and `lib/` together under `libexec` and symlinks only the executable into `bin`.** The executable resolves its own location, following symlinks, to find `lib/` next to itself. Installing the script directly into `bin` puts `lib/` one directory too high and breaks it.
 
 ## This repository's own CI
 
-**Pinned to GitHub-hosted runners, permanently.** This repo is public, so a pull request from an untrusted fork runs its own workflow file. RunPool refuses to register a public repository for exactly that reason, and it would be absurd for the tool to break its own rule. `--allow-public` exists for users who have weighed the risk on their own machine; it is not licence to point this repository at a pool.
+**Pinned to GitHub-hosted runners, permanently. This applies to `release.yml` as much as to `ci.yml`.** This repo is public, so a pull request from an untrusted fork runs its own workflow file. RunPool refuses to register a public repository for exactly that reason, and it would be absurd for the tool to break its own rule. `--allow-public` exists for users who have weighed the risk on their own machine; it is not licence to point this repository at a pool.
