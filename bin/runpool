@@ -43,7 +43,7 @@ export RUNPOOL_INVOKED
 # The released version, and the only place it is written. The Homebrew formula
 # builds from a git tag, so a tag without a matching bump here ships a binary
 # that misreports itself.
-RUNPOOL_VERSION="0.10.4"
+RUNPOOL_VERSION="0.11.0"
 
 # shellcheck source=lib/common.sh
 . "${RUNPOOL_ROOT}/lib/common.sh"

@@ -48,7 +48,7 @@ runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
 
 - **A pool is a set of runners bound to one GitHub scope.** GitHub offers repository, organisation and enterprise scopes and **no user-account scope**, which is the most surprising thing about self-hosted runners. An organisation shares one pool across its repositories; a personal repository needs its own and cannot borrow an organisation's.
 - **Capacity and routing stay separate.** A workflow's `runs-on` decides where a job lands. RunPool decides only whether the runners are up, so a workflow pointed at a pool that is down waits for it rather than quietly rerouting to a hosted runner that costs ten times as much.
-- **Two launch agents drive everything.** A tick every 60 seconds brings up pools with queued work, stands down idle ones, and checks their registrations are still live. A clean at 04:00 prunes work directories, caches and superseded binaries, skipping any pool mid-job. Only stopped pools are polled, so active work costs no API calls at all.
+- **Two launch agents drive everything.** A tick every 60 seconds brings up pools with queued work, stands down idle ones, and checks their registrations are still live. A run that stays queued across several wake cycles stops counting as work, so a run GitHub will never start cannot wake the pool for ever. A clean at 04:00 prunes work directories, caches and superseded binaries, skipping any pool mid-job. Only stopped pools are polled, so active work costs no API calls at all.
 
 The first job after a quiet spell waits about a minute for its pool to come up. Everything after that is immediate.
 

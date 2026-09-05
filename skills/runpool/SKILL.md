@@ -125,12 +125,14 @@ It works down the whole list below in one pass, prints a remedy against each fai
 - **an org pool with no watched repositories:** it never autoscales. Fix: give it `--watch` and `runpool apply`.
 - **an org pool watching only some of its repositories:** a note rather than a failure, because a repository may legitimately route its jobs elsewhere and nothing readable tells the difference. A job queued by an unwatched one waits until a watched one happens to wake the pool. **`doctor` makes a stale list audible; it does not maintain one.** The list stays hand-maintained, so a repository added to the organisation is still a change somebody has to make here too.
 - **runner(s) started before graceful shutdown was available:** a note, not a failure. The pool runs and takes work normally; only `--drain` is affected, and it refuses safely rather than killing the job. Fix: `runpool rewrite-agents`, then let the pool cycle. **This is how to check drain readiness without attempting a drain**, which on a busy pool means risking real jobs to answer a question.
+- **a queued run that no longer wakes the pool:** a warning naming the run. A run can stay `queued` for ever with no jobs attached, and counting it would wake the pool every twenty minutes for as long as it exists, so after three fruitless cycles it stops counting as work. **Every other queued run still wakes the pool normally**, including others in the same repository, so this narrows nothing but the one dead run. Fix: cancel it, `gh run cancel <id> --repo <owner/repo>`; a run with no jobs sometimes refuses to cancel and takes `gh api -X DELETE /repos/<owner/repo>/actions/runs/<id>`.
 - **disk, config permissions, the organisation's runner-group setting:** each with its own remedy. None of these stops a job being picked up, but they are the things nothing else ever looks at.
 
-**Two situations `doctor` deliberately reports as healthy, because they are.**
+**Three situations `doctor` deliberately reports as healthy, because they are.**
 
 - **`running 0/N` with a job genuinely queued:** the tick brings a pool up within about a minute. Wait before intervening; `runpool up <pool>` forces it.
 - **A clean report and the job still waits:** the problem is routing, not capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's. RunPool controls only whether the runners are up and cannot see either.
+- **a run held down and the rest of the queue moving:** intended. The guard subtracts held runs from the queued count rather than silencing the pool, and a run that is merely waiting its turn behind another gets a fresh chance once a day.
 
 ```bash
 runpool status                  # the same picture as a table, one row per pool

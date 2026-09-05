@@ -881,7 +881,12 @@ _rp_remove() {
     case "${POOL_DIR}" in "${RUNPOOL_BASE}/"*) rm -rf "${POOL_DIR}" ;; esac
   fi
   [ "${POOL_LEGACY_LAYOUT}" = "1" ] || rm -rf "${POOL_CACHE_DIR}"
+  # Every per-pool state file, not just the pause flag. A pool registered again
+  # under the same name inherits whatever is left here, and inheriting strikes
+  # would mean a brand-new pool refusing to wake.
   rm -f "$(_rp_pool_pause_flag "$1")"
+  rm -f "$(_rp_pool_started_flag "$1")"
+  rm -f "$(_rp_pool_stuck_file "$1")"
   rm -f "$(_rp_pool_conf "$1")"
   _rp_log "pool '$1' removed"
 
