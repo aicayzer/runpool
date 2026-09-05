@@ -81,12 +81,27 @@ build_pool() {
       >"${dir}/runner-${i}/.runner"
     # A config.sh that behaves like the real one: refuses nothing, writes a
     # .runner, and records exactly what it was asked for.
+    # Faithful to the real one in the way that matters here: it runs
+    # ./bin/Runner.Listener, so a dangling bin link makes it fail before it
+    # registers anything. A stub that ignored the links would pass whether or
+    # not they were rewritten, and prove nothing.
     cat >"${dir}/runner-${i}/config.sh" <<STUB
 #!/bin/bash
+[ -x ./bin/Runner.Listener ] || { echo "./config.sh: line 80: ./bin/Runner.Listener: No such file or directory" >&2; exit 1; }
 echo "\$*" >> "${cfg_log}"
 printf '{"agentId": 99, "workFolder": "x"}\n' > .runner
 STUB
     chmod +x "${dir}/runner-${i}/config.sh"
+    # GitHub's runner updater points bin and externals at versioned directories
+    # with ABSOLUTE links. A directory that moves therefore takes two dangling
+    # links with it, and config.sh dies on a missing Runner.Listener before it
+    # can register anything. The fixture has to carry them or the rename looks
+    # like it works.
+    mkdir -p "${dir}/runner-${i}/bin.2.337.0" "${dir}/runner-${i}/externals.2.337.0"
+    printf '#!/bin/bash\n' >"${dir}/runner-${i}/bin.2.337.0/Runner.Listener"
+    chmod +x "${dir}/runner-${i}/bin.2.337.0/Runner.Listener"
+    ln -sfn "${dir}/runner-${i}/bin.2.337.0" "${dir}/runner-${i}/bin"
+    ln -sfn "${dir}/runner-${i}/externals.2.337.0" "${dir}/runner-${i}/externals"
     printf 'plist for %s runner-%s\n' "${name}" "${i}" \
       >"${RUNPOOL_AGENT_DIR}/runpool.${name}.${i}.plist"
     i=$(( i + 1 ))
@@ -135,6 +150,21 @@ present "${RUNPOOL_BASE}/runners/bravo/runner-1" "the runner tree moved"
 absent  "${RUNPOOL_BASE}/runners/alpha"          "the old runner tree"
 present "${RUNPOOL_CACHE_DIR}/pools/bravo"       "the cache moved"
 absent  "${RUNPOOL_CACHE_DIR}/pools/alpha"       "the old cache"
+
+# The links have to be relative afterwards, and they have to resolve. An
+# absolute link left pointing into the old path is a runner that cannot start,
+# and config.sh fails before registering, which leaves the pool half renamed.
+for r in 1 2; do
+  link="${RUNPOOL_BASE}/runners/bravo/runner-${r}/bin"
+  [ -L "${link}" ] || fail "runner-${r}: bin is not a symlink"
+  case "$(readlink "${link}")" in
+    /*) fail "runner-${r}: bin is still an absolute link into the old path" ;;
+  esac
+  [ -d "${link}/" ] || fail "runner-${r}: bin does not resolve after the move"
+  ok
+  [ -d "${RUNPOOL_BASE}/runners/bravo/runner-${r}/externals/" ] || fail "runner-${r}: externals does not resolve"
+  ok
+done
 
 # Written by _rp_write_plist against the new label, and the old ones removed by
 # hand: _rp_rewrite_plists only ever writes.

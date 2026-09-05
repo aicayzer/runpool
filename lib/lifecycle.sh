@@ -571,7 +571,15 @@ _rp_move_dir() {
   mv "${from}" "${to}"
 }
 
-_rp_migrate_rewrite_runner_links() {
+# GitHub's runner updater points `bin` and `externals` at its versioned
+# directories with ABSOLUTE symlinks, so a runner directory that moves takes
+# two dangling links with it and `./config.sh` dies on a missing
+# Runner.Listener. Rewriting them relative makes the installation
+# self-contained, and therefore safe to move again.
+#
+# Every caller that relocates a runner directory has to do this, and do it
+# before running config.sh rather than after.
+_rp_rewrite_runner_links() {
   local runner_dir="$1" name link target target_name
   for name in bin externals; do
     link="${runner_dir}/${name}"
@@ -579,12 +587,9 @@ _rp_migrate_rewrite_runner_links() {
     target=$(readlink "${link}") || return 1
     target_name="${target##*/}"
     [ -n "${target_name}" ] && [ -d "${runner_dir}/${target_name}" ] || {
-      _rp_err "migration copied an unresolved runner link: ${link} -> ${target}"
+      _rp_err "unresolved runner link: ${link} -> ${target}"
       return 1
     }
-    # GitHub's runner updater creates absolute links to its versioned bin and
-    # externals directories. Make the copied installation self-contained so
-    # removing the legacy tree cannot break Runner.Listener afterwards.
     ln -sfn "${target_name}" "${link}" || return 1
   done
 }
@@ -697,7 +702,7 @@ _rp_migrate_storage() {
     while [ "${i}" -le "${POOL_COUNT}" ]; do
       runner_dir="${new_dir}/runner-${i}"
       cache_dir="${cache_pool}/runner-${i}"
-      _rp_migrate_rewrite_runner_links "${runner_dir}" || return 1
+      _rp_rewrite_runner_links "${runner_dir}" || return 1
       mkdir -p "${cache_dir}" || return 1
       # A work tree is regenerable but not necessarily portable. Compilers can
       # bake its absolute path into build artifacts, and a remote cache can
@@ -1074,6 +1079,10 @@ CONF
       _rp_log "${new} runner-${i}: past the pool's count of ${POOL_COUNT}, deregistered and left on disk"
       continue
     }
+    # Before config.sh, not after: the runner's bin and externals links are
+    # absolute and now point into the directory this pool used to live in, so
+    # ./config.sh cannot even start until they are made relative.
+    _rp_rewrite_runner_links "${runner_dir}" || return 1
     _rp_migrate_update_work_folder "${runner_dir}" "$(_rp_runner_work_dir "${new}" "${i}")" || return 1
     runner_name="$(hostname -s)-${new}-${i}"
     _rp_log "${new} runner-${i}: registering as '${runner_name}'"
