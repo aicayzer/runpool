@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reference notifier — POST whatever runpool reports to a webhook.
+# Reference notifier: POST whatever runpool reports to a webhook.
 #
 # runpool never delivers anything itself. It writes one JSON object to this
 # script's stdin and that is the whole contract, so replacing this with a

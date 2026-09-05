@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lifecycle.sh — creating, resizing, starting, stopping and destroying pools.
+# lifecycle.sh: creating, resizing, starting, stopping and destroying pools.
 #
 # A pool is a set of runners bound to one GitHub scope. GitHub offers
 # repository, organisation and enterprise scopes and no user-account scope, so
@@ -7,7 +7,7 @@
 # repository needs its own. That constraint is why a pool is the unit here.
 
 # ---------------------------------------------------------------------------
-# register — create and configure a new pool (left stopped)
+# register: create and configure a new pool (left stopped)
 # ---------------------------------------------------------------------------
 _rp_register() {
   _rp_require gh   || return 1
@@ -50,7 +50,7 @@ _rp_register() {
   # The same validators lib/apply.sh runs over the pools file. They lived in
   # lib/common.sh with only that one caller, so a target given on the command
   # line reached the config file unchecked and 'runpool register x --org a"b'
-  # wrote POOL_TARGET="a"b" — a config that then fails to source at all, taking
+  # wrote POOL_TARGET="a"b", a config that then fails to source at all, taking
   # the pool with it.
   if [ "${scope}" = "org" ]; then
     _rp_valid_gh_name "${target}" || { _rp_err "'${target}' is not an organisation name"; return 1; }
@@ -68,7 +68,7 @@ _rp_register() {
     # for one. Refused rather than ignored: silently doing nothing is how a
     # pool ends up never waking and nobody knowing why.
     [ "${scope}" = "org" ] || {
-      _rp_err "--watch applies to org pools only — a repo pool polls ${target} itself"
+      _rp_err "--watch applies to org pools only. A repo pool polls ${target} itself"
       return 1
     }
     for tok in $(echo "${watch}" | tr ',' ' '); do
@@ -97,7 +97,7 @@ _rp_register() {
         if [ "${allow_public}" = "1" ]; then
           _rp_log "WARNING: ${target} is PUBLIC and --allow-public was given. Any fork's pull request can run its own workflow file here, as your user. Require approval for fork pull requests on that repository."
         else
-          _rp_err "${target} is PUBLIC — refusing to register self-hosted runners on a public repo."
+          _rp_err "${target} is PUBLIC, so refusing to register self-hosted runners on a public repo."
           _rp_err "A pull request from any fork would run its own workflow file here, as your user."
           _rp_err "If that is genuinely what you want: runpool register ${name} --repo ${target} --allow-public"
           return 1
@@ -107,7 +107,7 @@ _rp_register() {
         # Fails closed. An empty answer means the API call failed, not that the
         # repository is private, and treating those the same skipped the check
         # exactly when GitHub was being unreliable.
-        _rp_err "could not determine the visibility of ${target} — refusing."
+        _rp_err "could not determine the visibility of ${target}, so refusing."
         _rp_err "Check 'gh auth status' and that the repository exists, then retry."
         return 1
         ;;
@@ -154,7 +154,7 @@ _rp_register() {
       mkdir -p "${cache_dir}/work" "${cache_dir}/pnpm" "${cache_dir}/npm" "${cache_dir}/tmp"
       [ -f "${runner_dir}/config.sh" ] || tar -xzf "${tarball}" -C "${runner_dir}" || return 1
       token="$(_rp_registration_token "${scope}" "${target}")" \
-        || { _rp_err "${name} runner-${i}: no registration token — check 'gh auth status', that ${target} exists, and that you have admin on it"; return 1; }
+        || { _rp_err "${name} runner-${i}: no registration token. Check 'gh auth status', that ${target} exists, and that you have admin on it"; return 1; }
       runner_name="$(hostname -s)-${name}-${i}"
       _rp_log "${name} runner-${i}: registering as '${runner_name}'"
       ( cd "${runner_dir}" && ./config.sh --unattended --replace \
@@ -170,7 +170,7 @@ _rp_register() {
   # rather than added afterwards by whoever called this. An org pool with no
   # watch list never autoscales, so a create that succeeds and a write that
   # follows it leaves a window where a crash produces a pool that works, looks
-  # healthy, and silently never wakes — with nothing recording why. One write,
+  # healthy, and silently never wakes, with nothing recording why. One write,
   # no window. Repo pools get no line at all: they poll their own target.
   {
     cat <<CONF
@@ -189,7 +189,7 @@ CONF
 }
 
 # ---------------------------------------------------------------------------
-# set-count — change a pool's runner count after registration
+# set-count: change a pool's runner count after registration
 #
 # GitHub has no concept of a pool. config.sh configures exactly one runner and
 # takes no count, so a pool of N is N separate installations and changing N
@@ -220,7 +220,7 @@ _rp_write_pool_count() {
 # looks healthy the whole time.
 #
 # awk rather than cat or sed: awk terminates every record with ORS, which is
-# what supplies the newline a file was missing. The value needs no quoting —
+# what supplies the newline a file was missing. The value needs no quoting:
 # _rp_valid_gh_repo has already rejected anything but GitHub identifiers and
 # commas.
 _rp_write_pool_watch() {
@@ -301,7 +301,7 @@ _rp_set_count_locked() {
   # be: returning success for `set-count p 6 --if-count 4` on a pool that has
   # become 6 would tell the caller its stale view was right.
   if [ -n "${expect}" ] && [ "${expect}" != "${have}" ]; then
-    _rp_err "'${name}' has ${have} runner(s), not ${expect} — refusing to resize. Something else changed it; re-read the count and retry."
+    _rp_err "'${name}' has ${have} runner(s), not ${expect}, so refusing to resize. Something else changed it; re-read the count and retry."
     return 1
   fi
 
@@ -321,7 +321,7 @@ _rp_set_count_locked() {
   # rather than something --drain has to be trusted to have handled.
   busy="$(_rp_busy_in "${POOL_DIR}")"
   if [ "${busy}" -gt 0 ]; then
-    _rp_err "'${name}' has ${busy} job(s) running — refusing to resize. Wait for them, or retry with --drain to let them finish first."
+    _rp_err "'${name}' has ${busy} job(s) running, so refusing to resize. Wait for them, or retry with --drain to let them finish first."
     return 1
   fi
 
@@ -336,7 +336,7 @@ _rp_set_count_locked() {
       [ -f "${runner_dir}/config.sh" ] || tar -xzf "${tarball}" -C "${runner_dir}" || return 1
       if [ ! -f "${runner_dir}/.runner" ]; then
         token="$(_rp_registration_token "${POOL_SCOPE}" "${POOL_TARGET}")" \
-          || { _rp_err "${name} runner-${i}: no registration token — check 'gh auth status', that ${POOL_TARGET} exists, and that you have admin on it"; return 1; }
+          || { _rp_err "${name} runner-${i}: no registration token. Check 'gh auth status', that ${POOL_TARGET} exists, and that you have admin on it"; return 1; }
         runner_name="$(hostname -s)-${name}-${i}"
         _rp_log "${name} runner-${i}: registering as '${runner_name}'"
         ( cd "${runner_dir}" && ./config.sh --unattended --replace \
@@ -354,7 +354,7 @@ _rp_set_count_locked() {
     # longer matches the agents on disk, so bringing the pool up fails on a
     # plist that has just been removed. That failure returns before the
     # activity timestamp is touched, and the sweep in the same tick then stands
-    # every pool down on stale idle data — including one autoscale was trying
+    # every pool down on stale idle data, including one autoscale was trying
     # to start for queued work. Shrinking first makes any tick in the window
     # see the smaller pool, which is entirely valid.
     _rp_write_pool_count "${name}" "${want}"
@@ -397,14 +397,14 @@ _rp_set_count_locked() {
   # one is in the log above, and `runpool doctor` keeps reporting the mismatch
   # until they are gone.
   if [ "${orphaned}" -gt 0 ]; then
-    _rp_err "${orphaned} runner(s) are still registered on ${POOL_TARGET} — resize finished locally but GitHub was not updated."
+    _rp_err "${orphaned} runner(s) are still registered on ${POOL_TARGET}: resize finished locally but GitHub was not updated."
     return 1
   fi
   return 0
 }
 
 # ---------------------------------------------------------------------------
-# reregister — recreate GitHub registrations, keeping the local install
+# reregister: recreate GitHub registrations, keeping the local install
 #
 # GitHub deletes the registration of a runner that has not connected for a
 # while. The local install is untouched by that and still looks healthy: it
@@ -425,13 +425,13 @@ _rp_reregister() {
     runner_dir="${POOL_DIR}/runner-${i}"
     [ -f "${runner_dir}/config.sh" ] || { _rp_err "${name} runner-${i}: no install at ${runner_dir}"; return 1; }
     token="$(_rp_registration_token "${POOL_SCOPE}" "${POOL_TARGET}")" \
-      || { _rp_err "${name} runner-${i}: no registration token — check 'gh auth status', that ${POOL_TARGET} exists, and that you have admin on it"; return 1; }
+      || { _rp_err "${name} runner-${i}: no registration token. Check 'gh auth status', that ${POOL_TARGET} exists, and that you have admin on it"; return 1; }
     runner_name="$(hostname -s)-${name}-${i}"
     # config.sh refuses to reconfigure over an existing registration, and
     # --replace only covers a name collision on the server side. Note that
     # .runner_migrated counts as "configured" exactly as .runner does, so
     # leaving it behind fails the reconfigure with a misleading "already
-    # configured" — remove the whole set, not the obvious one.
+    # configured". Remove the whole set, not the obvious one.
     rm -f "${runner_dir}/.runner" "${runner_dir}/.credentials" \
           "${runner_dir}/.credentials_rsaparams" "${runner_dir}/.runner_migrated" \
           "${runner_dir}/.service"
@@ -449,7 +449,7 @@ _rp_reregister() {
 }
 
 # ---------------------------------------------------------------------------
-# migrate-storage — copy a legacy installation into macOS-native roots
+# migrate-storage: copy a legacy installation into macOS-native roots
 # ---------------------------------------------------------------------------
 # The migration copies first and leaves the old tree alone. A runner's
 # registration credentials stay valid after its files and workFolder move, but
@@ -587,7 +587,7 @@ _rp_migrate_storage() {
     busy=$(( busy + $(_rp_busy_in "${POOL_DIR}") ))
   done
   if [ "${busy}" -gt 0 ]; then
-    _rp_err "${busy} job(s) are running — refusing to migrate. Wait for them to finish, then retry."
+    _rp_err "${busy} job(s) are running, so refusing to migrate. Wait for them to finish, then retry."
     return 1
   fi
 
@@ -689,14 +689,14 @@ _rp_migrate_storage() {
 # ---------------------------------------------------------------------------
 _rp_up() {
   _rp_load_pool "$1" || return 1
-  if _rp_paused; then _rp_err "runpool is paused — run 'runpool resume' first"; return 1; fi
-  if _rp_pool_paused "$1"; then _rp_err "pool '$1' is paused — run 'runpool resume $1' first"; return 1; fi
+  if _rp_paused; then _rp_err "runpool is paused: run 'runpool resume' first"; return 1; fi
+  if _rp_pool_paused "$1"; then _rp_err "pool '$1' is paused: run 'runpool resume $1' first"; return 1; fi
   # Not while another process is mid-resize or mid-drain. Restarting a pool
   # whose runners are deliberately winding down would hand them new work and
   # undo the drain. Scoped to another process so a resize can still bring the
   # pool back up at the end of its own work.
   if _rp_resize_locked_by_other "$1"; then
-    _rp_err "pool '$1' is being reconfigured — wait for that to finish, then retry."
+    _rp_err "pool '$1' is being reconfigured. Wait for that to finish, then retry."
     return 1
   fi
   local i label plist loaded=0
@@ -747,7 +747,7 @@ _rp_drain_pool() {
   local name="$1" timeout="$2" i label busy waited=0 poll=5 stale="" on
 
   # Refuse rather than guess. An agent loaded before this release has no
-  # RUNNER_MANUALLY_TRAP_SIG, so unloading it kills the job — precisely what
+  # RUNNER_MANUALLY_TRAP_SIG, so unloading it kills the job, precisely what
   # this command exists to avoid. Checked against the loaded environment, so
   # a pool that has already cycled since upgrading drains normally and only
   # the runners that would actually lose work are refused.
@@ -777,7 +777,7 @@ _rp_drain_pool() {
     busy="$(_rp_busy_in "${POOL_DIR}")"
     [ "${busy}" -eq 0 ] && break
     if [ "${waited}" -ge "${timeout}" ]; then
-      _rp_err "'${name}' still has ${busy} job(s) running after $(( timeout / 60 ))m — no longer waiting."
+      _rp_err "'${name}' still has ${busy} job(s) running after $(( timeout / 60 ))m, so no longer waiting."
       _rp_err "The runners are already stopped and will exit as their jobs finish. Wait and retry, or 'runpool down ${name} --force' to end them now."
       return 1
     fi
@@ -840,7 +840,7 @@ _rp_down() {
   set -- "${name}"
   busy="$(_rp_busy_in "${POOL_DIR}")"
   if [ "${busy}" -gt 0 ] && [ "${force}" = "0" ]; then
-    _rp_err "'$1' has ${busy} job(s) running — refusing to stand down (they would fail). Wait for them, or: runpool down $1 --drain (finishes them first), or --force (ends them now)"
+    _rp_err "'$1' has ${busy} job(s) running, so refusing to stand down (they would fail). Wait for them, or: runpool down $1 --drain (finishes them first), or --force (ends them now)"
     return 1
   fi
   i=1
@@ -857,7 +857,7 @@ _rp_up_all()   { local p; for p in $(_rp_pool_names); do _rp_pool_paused "${p}" 
 _rp_down_all() { local p; for p in $(_rp_pool_names); do _rp_down "${p}" "${1:-}"; done; }
 
 # ---------------------------------------------------------------------------
-# remove — deregister and delete a pool entirely
+# remove: deregister and delete a pool entirely
 # ---------------------------------------------------------------------------
 _rp_remove() {
   _rp_load_pool "$1" || return 1
@@ -890,7 +890,7 @@ _rp_remove() {
   # a remove there is no pool left to report it, so this message and the DELETE
   # commands above it are the only record that anything is outstanding.
   if [ "${orphaned}" -gt 0 ]; then
-    _rp_err "${orphaned} runner(s) are still registered on ${POOL_TARGET}. The pool is gone locally, so nothing will report this again — run the DELETE commands above, or remove them from GitHub's runner settings."
+    _rp_err "${orphaned} runner(s) are still registered on ${POOL_TARGET}. The pool is gone locally, so nothing will report this again: run the DELETE commands above, or remove them from GitHub's runner settings."
     return 1
   fi
   return 0

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# stats.sh — what recorded jobs actually cost.
+# stats.sh: what recorded jobs actually cost.
 #
 # Deliberately a description rather than an analysis.
 #
@@ -158,7 +158,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# --queue — the wait before a runner picked the job up
+# --queue: the wait before a runner picked the job up
 # ---------------------------------------------------------------------------
 # Queue time is the figure that answers "do I need more runners", because more
 # runners help if and only if work is waiting. The job hook fires when a runner
@@ -171,9 +171,9 @@ EOF
 # `status --json --local` exists to prevent, so the two readouts stay separate.
 #
 # contrib/telemetry-join.sh is INVOKED, not reimplemented here. It carries two
-# correctness traps that took working out — run id plus runner name matches
+# correctness traps that took working out. Run id plus runner name matches
 # several API jobs and needs the nearest-start tie-break, and created_at is
-# run-level rather than job-level — and a second copy is a second place to get
+# run-level rather than job-level, and a second copy is a second place to get
 # them wrong.
 _rp_stats_queue() {
   local f="$1"; shift
@@ -185,7 +185,7 @@ _rp_stats_queue() {
   # bin/ and lib/ under libexec, so this resolves for a tap install too.
   join="${RUNPOOL_ROOT:-}/contrib/telemetry-join.sh"
   [ -x "${join}" ] || {
-    _rp_err "cannot run ${join} — contrib/ ships with runpool; check the install, or chmod +x it"
+    _rp_err "cannot run ${join}: contrib/ ships with runpool; check the install, or chmod +x it"
     return 1
   }
 
@@ -197,7 +197,7 @@ _rp_stats_queue() {
   # falls back to `runpool status --json --local` and picks up whatever runpool
   # is on PATH, which is not necessarily the one being run.
   joined="$("${join}" "${f}" "$@")" || {
-    _rp_err "the join failed — run '${join} ${f}' directly to see why"
+    _rp_err "the join failed: run '${join} ${f}' directly to see why"
     return 1
   }
 
@@ -241,7 +241,7 @@ EOF
   # "median queue 47s" is that blind spot again with a new number on it.
   echo ""
   echo "A queue time is not one thing. A wait can be a cold pool waking, a"
-  echo "dependency that has not finished, or no free runner — and only the last"
+  echo "dependency that has not finished, or no free runner, and only the last"
   echo "is fixed by more runners. On an on-demand pool the first job after a"
   echo "quiet spell always shows about a minute of queue while the pool starts,"
   echo "and no amount of capacity removes it."

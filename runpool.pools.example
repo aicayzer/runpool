@@ -1,4 +1,4 @@
-# runpool pools — copy to ~/.config/runpool/pools
+# runpool pools: copy to ~/.config/runpool/pools
 #
 # What this machine is meant to have. `runpool apply` reconciles the machine to
 # it; `runpool apply --dry-run` prints what would change and touches nothing.
@@ -28,7 +28,7 @@
 #
 # Blank lines are ignored. A '#' comments out the line it is on and nothing
 # else. A trailing '\' continues onto the next line, which is what keeps a long
-# --watch list readable — and the line it continues onto has to say something,
+# --watch list readable, and the line it continues onto has to say something,
 # so a half-uncommented example is an error naming both lines rather than a
 # pool quietly missing half of itself.
 #

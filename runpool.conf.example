@@ -1,4 +1,4 @@
-# runpool configuration — copy to ~/.config/runpool/config
+# runpool configuration: copy to ~/.config/runpool/config
 #
 # Everything here has a working default, so an empty file is a valid config.
 # This lives outside the repository because it is the only place installation

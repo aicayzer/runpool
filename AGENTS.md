@@ -57,7 +57,7 @@ assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 
 **Two plist keys are load-bearing and neither looks it.** `RUNNER_MANUALLY_TRAP_SIG` is what makes GitHub's `run.sh` finish its current job on SIGTERM instead of dying with it, and `ExitTimeOut` is what stops launchd sending SIGKILL twenty seconds later. Together they are the whole of `--drain`; remove either and the drain silently becomes the job-killing behaviour it exists to replace.
 
-**The consequence is that an agent already loaded is not necessarily an agent that behaves correctly.** A plist rewritten on disk changes nothing until the pool cycles. Anything depending on agent behaviour must therefore read the *loaded* environment with `launchctl print`, not the file — `_rp_agent_traps_signals` is the example, and `_rp_drain_pool` refuses per runner on the strength of it. The file on disk is what somebody intended; the loaded environment is what is true.
+**The consequence is that an agent already loaded is not necessarily an agent that behaves correctly.** A plist rewritten on disk changes nothing until the pool cycles. Anything depending on agent behaviour must therefore read the *loaded* environment with `launchctl print`, not the file. `_rp_agent_traps_signals` is the example, and `_rp_drain_pool` refuses per runner on the strength of it. The file on disk is what somebody intended; the loaded environment is what is true.
 
 ## The reconfiguration lock
 
@@ -69,9 +69,9 @@ assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 
 ## Configuration precedence
 
-Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **A new setting has to be added in four places in that block** — the snapshot, the restore, the `unset`, and the `export` — or it silently becomes un-overridable, or leaks a `_rp_env_*` variable, or fails to reach a child process.
+Environment, then config file, then built-in default. The config file uses plain assignments, so `lib/common.sh` snapshots any `RUNPOOL_*` already in the environment, sources the config, then restores the snapshot. **A new setting has to be added in four places in that block:** the snapshot, the restore, the `unset`, and the `export`. Otherwise it silently becomes un-overridable, or leaks a `_rp_env_*` variable, or fails to reach a child process.
 
-`RUNPOOL_POOLS_FILE` is deliberately derived from `XDG_CONFIG_HOME` rather than from `RUNPOOL_CONFIG`'s directory, so that pointing the config at `/dev/null` to isolate a test does not also move the pools file somewhere unexpected. **The corollary is that neither `RUNPOOL_CONFIG` nor `RUNPOOL_BASE` isolates it** — it has to be set on its own, or overridden per run with `apply --file`. `/dev/null` is a valid value: `apply` tests for a readable non-directory rather than a regular file, so the isolation idiom means the same thing for both settings.
+`RUNPOOL_POOLS_FILE` is deliberately derived from `XDG_CONFIG_HOME` rather than from `RUNPOOL_CONFIG`'s directory, so that pointing the config at `/dev/null` to isolate a test does not also move the pools file somewhere unexpected. **The corollary is that neither `RUNPOOL_CONFIG` nor `RUNPOOL_BASE` isolates it:** it has to be set on its own, or overridden per run with `apply --file`. `/dev/null` is a valid value: `apply` tests for a readable non-directory rather than a regular file, so the isolation idiom means the same thing for both settings.
 
 ## Working on it
 
@@ -103,7 +103,7 @@ RUNPOOL_BASE=/tmp/rp-test RUNPOOL_CONFIG=/dev/null ./bin/runpool status --json
 
 **`RUNPOOL_BASE` does not move the pools file**, per *Configuration precedence* above. Anything touching `apply` needs `RUNPOOL_POOLS_FILE` or `--file` too, or it reads the real one and plans against real GitHub targets. `RUNPOOL_LOG_DIR` too, or the log lands in a real installation's. `CONTRIBUTING.md` has the full isolated invocation.
 
-**`register`, `set-count`, `reregister` and `remove` talk to the real GitHub API and real runners.** None has a dry-run and there is nowhere sensible to add one, because the work *is* the API call. Verify destructive changes against a throwaway private repository, never while a job is in flight — the tool refuses on purpose, and forcing past that kills live jobs.
+**`register`, `set-count`, `reregister` and `remove` talk to the real GitHub API and real runners.** None has a dry-run and there is nowhere sensible to add one, because the work *is* the API call. Verify destructive changes against a throwaway private repository, never while a job is in flight. The tool refuses on purpose, and forcing past that kills live jobs.
 
 **`apply --dry-run` is the one exception, and only for the plan.** It reads the pools file and the pool configs, prints what it would do, and calls nothing, which makes all of `lib/apply.sh` testable with no GitHub account. What it does *not* cover: visibility is checked inside `register`, which a dry run never reaches, so a `+` line is a plan and not a promise.
 
@@ -135,7 +135,7 @@ The pattern is already established: configuration precedence was found and fixed
 
 The workflow then re-runs the checks that gate `main`, attaches a source tarball to a GitHub release, and bumps the formula in the tap to point at it. Nothing else is done by hand.
 
-**The tag message is the release notes.** There is no second copy anywhere: no `CHANGELOG.md`, nothing generated from commits, nothing typed into the GitHub UI afterwards. Write them where you cut the tag, and keep them short: a headline and a paragraph or two, plus any action the reader must take on upgrading. A reader wants to know what changed and whether it affects them; anyone who needs more than that can read the code. Left unstated, this drifts — the notes were once twenty words and had reached four hundred. **The workflow refuses a lightweight tag** for this reason, and the check is `git cat-file -t` rather than `for-each-ref`, because `for-each-ref` falls through to the *commit* message on a lightweight tag and would publish something plausible and wrong.
+**The tag message is the release notes.** There is no second copy anywhere: no `CHANGELOG.md`, nothing generated from commits, nothing typed into the GitHub UI afterwards. Write them where you cut the tag, and keep them short: a headline and a paragraph or two, plus any action the reader must take on upgrading. A reader wants to know what changed and whether it affects them; anyone who needs more than that can read the code. Left unstated, this drifts: the notes were once twenty words and had reached four hundred. **The workflow refuses a lightweight tag** for this reason, and the check is `git cat-file -t` rather than `for-each-ref`, because `for-each-ref` falls through to the *commit* message on a lightweight tag and would publish something plausible and wrong.
 
 **The tag and `RUNPOOL_VERSION` must agree, and the workflow enforces it** before spending a macOS runner. A tag without a matching bump ships a binary that misreports itself, which was previously only a line in this file asking someone to remember.
 

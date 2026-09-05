@@ -63,7 +63,7 @@ check "spaces around entries do not matter" \
 
 # A substring is not a match, and the direction matters. Without the comma
 # fencing, a watch list naming `acme/one-more` would satisfy `acme/one`,
-# because the shorter name occurs inside the longer one — so a genuinely
+# because the shorter name occurs inside the longer one, so a genuinely
 # unwatched repository would be reported as watched. That is the direction
 # that fails silently: the check would say the list is complete when it is
 # not, which is exactly the state it exists to catch.

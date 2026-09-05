@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Optional job hook — stamps machine state into every job, and optionally
+# Optional job hook: stamps machine state into every job, and optionally
 # records it locally so the right runner count can be measured rather than
 # guessed.
 #
@@ -66,7 +66,7 @@ echo "[runpool ${phase}] ${line}"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -w "${GITHUB_STEP_SUMMARY:-/nonexistent}" ]; then
   {
     echo ""
-    echo "**Machine at job ${phase}** — ${line}"
+    echo "**Machine at job ${phase}:** ${line}"
   } >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
 fi
 
