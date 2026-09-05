@@ -273,4 +273,26 @@ ok
 ok
 rm -rf "${RUNPOOL_STATE_DIR}/resize.bravo.lock"
 
+# ---------------------------------------------------------------------------
+# reregister repairs a moved install
+# ---------------------------------------------------------------------------
+# The documented recovery from a rename that failed part way, so it has to
+# cope with the dangling links that failure leaves behind.
+build_pool alpha 1
+mv "${RUNPOOL_BASE}/runners/alpha" "${RUNPOOL_BASE}/runners/moved"
+sed -i '' "s|runners/alpha|runners/moved|" "${RUNPOOL_BASE}/pools/alpha.conf"
+(
+  # shellcheck source=/dev/null
+  . "${repo_dir}/lib/common.sh" 2>/dev/null || true
+  # shellcheck source=/dev/null
+  . "${repo_dir}/lib/lifecycle.sh"
+  _rp_down() { return 0; }
+  _rp_busy_in() { echo 0; }
+  _rp_reregister alpha
+) >"${scratch_dir}/out" 2>&1 || fail "reregister did not repair a moved install: $(cat "${scratch_dir}/out")"
+case "$(readlink "${RUNPOOL_BASE}/runners/moved/runner-1/bin")" in
+  /*) fail "reregister left an absolute bin link" ;;
+  *) ok ;;
+esac
+
 echo "ok: ${pass} case(s)"
