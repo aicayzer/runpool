@@ -493,6 +493,12 @@ _rp_reregister_locked() {
     rm -f "${runner_dir}/.runner" "${runner_dir}/.credentials" \
           "${runner_dir}/.credentials_rsaparams" "${runner_dir}/.runner_migrated" \
           "${runner_dir}/.service"
+    # reregister is the repair command, and a runner whose directory has been
+    # moved has absolute bin and externals links pointing where it used to be.
+    # config.sh cannot start against those, so repairing them is part of
+    # repairing the install rather than a separate errand. Relative links are
+    # already correct, so this is a no-op on a healthy runner.
+    _rp_rewrite_runner_links "${runner_dir}" || return 1
     _rp_log "${name} runner-${i}: re-registering as '${runner_name}'"
     ( cd "${runner_dir}" && ./config.sh --unattended --replace \
         --url "https://github.com/${POOL_TARGET}" --token "${token}" \
