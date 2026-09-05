@@ -66,7 +66,7 @@ _rp_running_in() {
 # cleanly, looks healthy in every local check, and picks up nothing. Reporting
 # only the local view hid exactly that for three weeks.
 _rp_status() {
-  local as_json=0 local_only=0 arg total_running=0 total_busy=0 p running busy gh reg online gh_display note settling warn=0
+  local as_json=0 local_only=0 arg total_running=0 total_busy=0 p running busy gh reg online gh_display note settling stuck warn=0
   for arg in "$@"; do
     case "${arg}" in
       --json)  as_json=1 ;;
@@ -102,6 +102,12 @@ _rp_status() {
       esac
     fi
 
+    # Outside the local_only branch above: this is local state, so --local
+    # shows it too, and it is the only visible sign that a queued run has
+    # stopped waking the pool.
+    stuck="$(_rp_stuck_held "$(_rp_read_pool_stuck "${p}")" "${RUNPOOL_STUCK_WAKES}" | awk 'NF { n++ } END { print n + 0 }')"
+    [ "${stuck}" -gt 0 ] && note="${note}  (${stuck} stuck queued run(s) ignored)"
+
     _rp_pool_paused "${p}" && note="  (paused)${note}"
     printf "  %-10s %-6s %-20s %7s %5s  %s%s\n" \
       "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${running}/${POOL_COUNT}" \
@@ -131,7 +137,7 @@ _rp_status() {
 # is thousands a day, and it makes a passive readout fail whenever the network
 # does, which is the opposite of what a passive readout is for.
 _rp_status_json() {
-  local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" pool_paused="false" reconfiguring="false" wr wfirst
+  local local_only="${1:-0}" p running busy gh reg online first=1 paused="false" pool_paused="false" reconfiguring="false" wr wfirst sr sid sfirst
   _rp_paused && paused="true"
   # Machine state belongs here rather than being recomputed by every caller.
   # The load threshold is configurable, so a status consumer that derived it
@@ -172,6 +178,17 @@ _rp_status_json() {
       wfirst=0
       printf '"%s"' "${wr}"
     done
+    # Runs autoscale has stopped counting as work, as "owner/repo#id". Safe to
+    # hand-assemble for the same reason as everything above: the repository is
+    # a validated GitHub identifier and the id is digits.
+    printf '],"stuck":['
+    sfirst=1
+    while read -r sr sid _; do
+      [ -n "${sr}" ] && [ -n "${sid}" ] || continue
+      [ "${sfirst}" = "1" ] || printf ','
+      sfirst=0
+      printf '"%s#%s"' "${sr}" "${sid}"
+    done < <(_rp_stuck_held "$(_rp_read_pool_stuck "${p}")" "${RUNPOOL_STUCK_WAKES}")
     printf ']}'
   done
   printf ']}\n'
@@ -235,7 +252,7 @@ _rp_doctor() {
 
   local gh_ok=1 pools=0 seen_orgs="" p running gh reg online settling
   local tick clean i missing avail_kb cache_avail_kb free mode other phase hook_fails
-  local all_repos unwatched drain_stale
+  local all_repos unwatched drain_stale stuck_repo stuck_id stuck_at stuck_jobs
 
   _rp_doctor_fails=0
   _rp_doctor_warns=0
@@ -452,6 +469,24 @@ _rp_doctor() {
         "fix: it clears on the next 'runpool set-count' or 'runpool down --drain'; or remove $(_rp_resize_lock_dir "${p}")"
     fi
 
+    # Before the gh_ok gate below, because this state is local: the pool has
+    # already decided, and the operator needs to hear it whether or not GitHub
+    # can be reached now. Read and never cleared, per the boundary at the top
+    # of this file; the next autoscale pass tidies it for free once the run
+    # leaves the queued set.
+    #
+    # `done < <(...)` and not a pipeline: `_rp_doctor_warns` is file-scope and
+    # a pipeline subshell would discard every increment.
+    while read -r stuck_repo stuck_id _ _ stuck_at; do
+      [ -n "${stuck_repo}" ] && [ -n "${stuck_id}" ] || continue
+      stuck_jobs=""
+      [ "${gh_ok}" = "1" ] && stuck_jobs="$(_rp_run_job_count "${stuck_repo}" "${stuck_id}")"
+      case "${stuck_jobs}" in ''|*[!0-9]*) stuck_jobs="" ;; *) stuck_jobs=" (github reports ${stuck_jobs} job(s) for it)" ;; esac
+      _rp_doctor_warn \
+        "${p}: ${stuck_repo} run ${stuck_id} has been queued for $(( ( $(_rp_now) - stuck_at ) / 3600 ))h and never starts, so it no longer wakes this pool${stuck_jobs}" \
+        "fix: gh run cancel ${stuck_id} --repo ${stuck_repo}; a run with no jobs that refuses to cancel takes 'gh api -X DELETE /repos/${stuck_repo}/actions/runs/${stuck_id}'"
+    done < <(_rp_stuck_held "$(_rp_read_pool_stuck "${p}")" "${RUNPOOL_STUCK_WAKES}")
+
     if [ "${gh_ok}" = "0" ]; then
       _rp_doctor_note "${p}: ${POOL_SCOPE} ${POOL_TARGET}, ${running}/${POOL_COUNT} running locally (github not checked)"
       continue
@@ -620,6 +655,97 @@ _rp_unwatched_repos() {
 }
 
 # ---------------------------------------------------------------------------
+# the stuck-queue rule
+# ---------------------------------------------------------------------------
+# A run can enter `queued` and stay there permanently with no jobs ever
+# attached. Autoscale counts queued runs, so it wakes the pool, finds nothing
+# to run, idles out and wakes again, for as long as the run exists. Nothing
+# reports it, because a pool that wakes and stands down is behaving exactly as
+# designed.
+#
+# The rule subtracts known-fruitless runs from the queued count rather than
+# suppressing the pool. Suppressing would blind an org pool to every other
+# repository it watches on account of one stuck run in one of them, and every
+# other run still has to wake it normally.
+#
+# How long a stuck run is given a second chance before it is judged again.
+# Not a setting: it exists so a run held by something transient, a concurrency
+# group upstream being the realistic case, cannot be held for ever. On expiry
+# the strike count drops to one below the threshold, so exactly one wake
+# re-checks it and it goes straight back to held if nothing has changed.
+RUNPOOL_STUCK_RETRY=86400
+
+# The three functions below are pure: strings in, a string out, no files, no
+# clock and no `gh`. That is what makes the rule testable at all, for the same
+# reason `_rp_unwatched_repos` above is pure.
+
+# $1 previous records, $2 currently-queued "<repo> <run_id>" lines,
+# $3 the pool's started stamp, $4 now, $5 threshold, $6 retry seconds.
+_rp_stuck_advance() {
+  awk -v started="$3" -v now="$4" -v thresh="$5" -v retry="$6" '
+    NR == FNR {
+      if (NF >= 5 && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/) {
+        k = $1 " " $2; strikes[k] = $3; seen[k] = $4; at[k] = $5
+      }
+      next
+    }
+    NF >= 2 {
+      k = $1 " " $2
+      if (k in strikes) {
+        s = strikes[k]; p = seen[k]; t = at[k]
+        if (p != started) { s = s + 1; p = started; t = now }
+        if (thresh > 0 && s >= thresh && retry > 0 && now - t >= retry) { s = thresh - 1; t = now }
+      } else {
+        s = 0; p = started; t = now
+      }
+      print $1, $2, s, p, t
+    }
+  ' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+
+# $1 records, $2 threshold. The runs that no longer count as work.
+_rp_stuck_held() {
+  awk -v thresh="$2" '
+    thresh > 0 && NF >= 5 && $3 ~ /^[0-9]+$/ && $3 >= thresh { print }
+  ' <(printf '%s\n' "$1")
+}
+
+# $1 previous records, $2 new records, $3 threshold. Held now and not before,
+# which is what makes the log line and the notification fire exactly once per
+# hold rather than on every tick.
+_rp_stuck_new_holds() {
+  awk -v thresh="$3" '
+    NR == FNR {
+      if (NF >= 5 && $3 ~ /^[0-9]+$/ && $3 >= thresh) was[$1 " " $2] = 1
+      next
+    }
+    thresh > 0 && NF >= 5 && $3 ~ /^[0-9]+$/ && $3 >= thresh && !(($1 " " $2) in was) { print }
+  ' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+
+# The queued runs in one repository, as "<total> <id,id,...>". One call, the
+# same as the count alone used to cost. A failed call yields an empty string,
+# so every caller degrades to the behaviour that predates this rule.
+_rp_queued_runs() {
+  local out
+  # The body, not just the status, has to be discarded on failure: gh prints
+  # GitHub's error JSON to stdout, so a watch list naming a repository that has
+  # been renamed or made private would otherwise hand the caller a line
+  # beginning '{"message":"Not Found"'. That used to reach an arithmetic
+  # expansion and abort it.
+  out="$(gh api "/repos/$1/actions/runs?status=queued&per_page=100&exclude_pull_requests=true" \
+         --jq '"\(.total_count) \([.workflow_runs[].id] | sort | map(tostring) | join(","))"' 2>/dev/null)" || return 0
+  printf '%s\n' "${out}"
+}
+
+# How many jobs GitHub says a run has. Corroboration for a message, never a
+# branch: zero jobs is the signature of the zombie case, but the local strike
+# rule already reaches the right answer without a second API shape.
+_rp_run_job_count() {
+  gh api "/repos/$1/actions/runs/$2/jobs?per_page=1" --jq '.total_count' 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # autoscale: bring a pool up when it has queued work
 # ---------------------------------------------------------------------------
 # Only DOWN pools are polled: one that is already up is serving, so during
@@ -628,7 +754,7 @@ _rp_unwatched_repos() {
 # per organisation.
 _rp_autoscale() {
   _rp_paused && return 0
-  local p up queued q wr
+  local p up queued held repos wr line n id ids started now prev fresh note
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
     _rp_pool_paused "${p}" && continue
@@ -638,20 +764,46 @@ _rp_autoscale() {
     _rp_resize_locked_by_other "${p}" && continue
     up="$(_rp_running_in "${p}" "${POOL_COUNT}")"
     [ "${up}" -gt 0 ] && continue
-    queued=0
-    if [ "${POOL_SCOPE}" = "repo" ]; then
-      q=$(gh api "/repos/${POOL_TARGET}/actions/runs?status=queued&per_page=1" --jq '.total_count' 2>/dev/null)
-      queued="${q:-0}"
-    else
-      for wr in $(echo "${POOL_WATCH:-}" | tr ',' ' '); do
-        [ -n "${wr}" ] || continue
-        q=$(gh api "/repos/${wr}/actions/runs?status=queued&per_page=1" --jq '.total_count' 2>/dev/null)
-        queued=$(( queued + ${q:-0} ))
-      done
+
+    # One repository at repo scope, the watch list at org scope. GitHub
+    # exposes queued runs per repository rather than per organisation, which
+    # is why the watch list is the wake mechanism and not merely advisory.
+    if [ "${POOL_SCOPE}" = "repo" ]; then repos="${POOL_TARGET}"
+    else repos="$(echo "${POOL_WATCH:-}" | tr ',' ' ')"
     fi
-    case "${queued}" in ''|*[!0-9]*) queued=0 ;; esac
-    if [ "${queued}" -gt 0 ]; then
-      _rp_log "autoscale: '${p}' has ${queued} queued job(s), bringing up"
+
+    queued=0
+    ids=""
+    for wr in ${repos}; do
+      [ -n "${wr}" ] || continue
+      line="$(_rp_queued_runs "${wr}")"
+      n="${line%% *}"
+      case "${n}" in ''|*[!0-9]*) n=0 ;; esac
+      queued=$(( queued + n ))
+      [ "${line}" = "${n}" ] && continue
+      for id in $(echo "${line#* }" | tr ',' ' '); do
+        case "${id}" in ''|*[!0-9]*) continue ;; esac
+        ids="${ids}${wr} ${id}
+"
+      done
+    done
+
+    started="$(_rp_pool_started_at "${p}")"
+    now="$(_rp_now)"
+    prev="$(_rp_read_pool_stuck "${p}")"
+    fresh="$(_rp_stuck_advance "${prev}" "${ids}" "${started}" "${now}" \
+                               "${RUNPOOL_STUCK_WAKES}" "${RUNPOOL_STUCK_RETRY}")"
+    _rp_write_pool_stuck "${p}" "${fresh}"
+
+    # Reported once per hold. A held pool logs nothing on subsequent ticks,
+    # or the loop this rule exists to end is replaced by a line a minute.
+    _rp_notify_stuck_queue "${p}" "$(_rp_stuck_new_holds "${prev}" "${fresh}" "${RUNPOOL_STUCK_WAKES}")"
+
+    held="$(_rp_stuck_held "${fresh}" "${RUNPOOL_STUCK_WAKES}" | awk 'NF { n++ } END { print n + 0 }')"
+    if [ "${queued}" -gt "${held}" ]; then
+      note=""
+      [ "${held}" -gt 0 ] && note=", ${held} held down"
+      _rp_log "autoscale: '${p}' has ${queued} queued run(s)${note}, bringing up"
       _rp_up "${p}"
     fi
   done

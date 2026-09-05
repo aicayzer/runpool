@@ -23,6 +23,7 @@ _rp_env_POOLS_FILE="${RUNPOOL_POOLS_FILE:-}"
 _rp_env_LOG_DIR="${RUNPOOL_LOG_DIR:-}"
 _rp_env_LABEL_NS="${RUNPOOL_LABEL_NS:-}"
 _rp_env_IDLE_SECS="${RUNPOOL_IDLE_SECS:-}"
+_rp_env_STUCK_WAKES="${RUNPOOL_STUCK_WAKES:-}"
 _rp_env_LOAD_WARN="${RUNPOOL_LOAD_WARN:-}"
 _rp_env_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 _rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
@@ -46,6 +47,7 @@ set +a
 [ -n "${_rp_env_LOG_DIR}" ]     && RUNPOOL_LOG_DIR="${_rp_env_LOG_DIR}"
 [ -n "${_rp_env_LABEL_NS}" ]    && RUNPOOL_LABEL_NS="${_rp_env_LABEL_NS}"
 [ -n "${_rp_env_IDLE_SECS}" ]   && RUNPOOL_IDLE_SECS="${_rp_env_IDLE_SECS}"
+[ -n "${_rp_env_STUCK_WAKES}" ] && RUNPOOL_STUCK_WAKES="${_rp_env_STUCK_WAKES}"
 [ -n "${_rp_env_LOAD_WARN}" ]   && RUNPOOL_LOAD_WARN="${_rp_env_LOAD_WARN}"
 [ -n "${_rp_env_NOTIFY_CMD}" ]  && RUNPOOL_NOTIFY_CMD="${_rp_env_NOTIFY_CMD}"
 [ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
@@ -53,12 +55,13 @@ set +a
 [ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
 [ -n "${_rp_env_DRAIN_TIMEOUT}" ] && RUNPOOL_DRAIN_TIMEOUT="${_rp_env_DRAIN_TIMEOUT}"
 unset _rp_env_BASE _rp_env_CACHE_DIR _rp_env_POOLS_FILE _rp_env_LOG_DIR _rp_env_LABEL_NS \
-      _rp_env_IDLE_SECS _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
+      _rp_env_IDLE_SECS _rp_env_STUCK_WAKES _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
       _rp_env_HOOK_DIR _rp_env_TELEMETRY _rp_env_DRAIN_TIMEOUT
 
 # Restored values need exporting again: the restore above is a plain assignment
 # and happens after 'set -a' was turned off.
 export RUNPOOL_BASE RUNPOOL_CACHE_DIR RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
+       RUNPOOL_STUCK_WAKES \
        RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_HOOK_DIR RUNPOOL_TELEMETRY \
        RUNPOOL_DRAIN_TIMEOUT \
        RUNPOOL_CONFIG RUNPOOL_POOLS_FILE
@@ -134,6 +137,13 @@ RUNPOOL_IDLE_SECS="${RUNPOOL_IDLE_SECS:-1200}"
 # one: agents up locally, nothing online at GitHub. Judging a pool inside that
 # window reports every healthy start as an outage.
 RUNPOOL_SETTLE_SECS="${RUNPOOL_SETTLE_SECS:-120}"
+
+# How many fruitless wake cycles a queued run is given before it stops counting
+# as work. A run can sit `queued` forever with no jobs ever attached, and
+# autoscale counting it wakes the pool, finds nothing, idles out and wakes
+# again for as long as the run exists. Three cycles is roughly an hour of
+# proof at the default idle threshold. Set to 0 to disable the guard.
+RUNPOOL_STUCK_WAKES="${RUNPOOL_STUCK_WAKES:-3}"
 
 # How long `--drain` waits for running jobs to finish before giving up.
 #
@@ -376,11 +386,43 @@ _rp_pool_paused() { [ -f "$(_rp_pool_pause_flag "$1")" ]; }
 # reason as the activity stamp above.
 _rp_pool_started_flag() { echo "${RUNPOOL_POOL_STATE_DIR}/$1.started"; }
 _rp_touch_pool_started() { _rp_now >| "$(_rp_pool_started_flag "$1")"; }
-_rp_pool_settling() {
+_rp_pool_started_at() {
   local started
   started=$(cat "$(_rp_pool_started_flag "$1")" 2>/dev/null || echo 0)
-  case "${started}" in ''|*[!0-9]*) return 1 ;; esac
+  case "${started}" in ''|*[!0-9]*) started=0 ;; esac
+  echo "${started}"
+}
+_rp_pool_settling() {
+  local started
+  started="$(_rp_pool_started_at "$1")"
+  [ "${started}" != "0" ] || return 1
   [ $(( $(_rp_now) - started )) -lt "${RUNPOOL_SETTLE_SECS}" ]
+}
+
+# Queued runs this pool has stopped counting as work, one record per line:
+#
+#   <owner/repo> <run_id> <strikes> <started_stamp> <strike_at>
+#
+# The started stamp is what the pool's `.started` flag held when that run was
+# last judged, and it is the whole of the rule: a strike is earned only once
+# the pool has come up and back down since, which is the only evidence that
+# waking for this run achieved nothing. A tick count would punish a pool that
+# cannot start at all, and elapsed time would punish a laptop that slept.
+#
+# Rewritten only when it changes, so an idle machine is not writing this file
+# sixty times an hour, and removed outright once nothing is queued.
+_rp_pool_stuck_file() { echo "${RUNPOOL_POOL_STATE_DIR}/$1.stuck"; }
+_rp_read_pool_stuck() { cat "$(_rp_pool_stuck_file "$1")" 2>/dev/null || true; }
+_rp_write_pool_stuck() {
+  local f cur
+  f="$(_rp_pool_stuck_file "$1")"
+  cur="$(cat "${f}" 2>/dev/null || true)"
+  if [ -z "$2" ]; then
+    rm -f "${f}"
+    return 0
+  fi
+  [ "${cur}" = "$2" ] && return 0
+  printf '%s\n' "$2" >| "${f}"
 }
 
 _rp_runner_cache_dir() { echo "${POOL_CACHE_DIR}/runner-$2"; }

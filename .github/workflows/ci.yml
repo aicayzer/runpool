@@ -53,3 +53,5 @@ jobs:
         run: tests/scheduler-agent-path.sh
       - name: pool settling window
         run: tests/pool-settling-window.sh
+      - name: stuck queue guard
+        run: tests/stuck-queue-guard.sh

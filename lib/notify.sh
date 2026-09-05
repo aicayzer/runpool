@@ -102,3 +102,30 @@ _rp_health_check() {
     esac
   done
 }
+
+# A run autoscale has stopped counting as work, reported once per hold.
+#
+# `warning`, not `critical`: the two criticals above are pools that cannot take
+# work at all, and nobody needs waking for a pool that has just stopped burning
+# a wake cycle every twenty minutes. The key carries the run id rather than
+# only the pool, deliberately breaking the three-segment shape of the others,
+# because the run is the incident: a receiver deduping per pool would swallow
+# the next stuck run in that pool a week later.
+#
+# $1 pool, $2 the new holds as "<repo> <run_id> ..." lines. Fires nothing when
+# there are none, and the caller is what guarantees each run appears once.
+_rp_notify_stuck_queue() {
+  local p="$1" repo id jobs
+  [ -n "${RUNPOOL_NOTIFY_CMD}" ] || return 0
+  [ -n "${2:-}" ] || return 0
+  printf '%s\n' "$2" | while read -r repo id _; do
+    [ -n "${repo}" ] && [ -n "${id}" ] || continue
+    jobs="$(_rp_run_job_count "${repo}" "${id}")"
+    case "${jobs}" in ''|*[!0-9]*) jobs="an unknown number of" ;; esac
+    _rp_notify warning \
+      "Pool '${p}' has stopped waking for a stuck queued run" \
+      "runpool/stuck-queue/${p}/${id}" \
+      "Run ${id} in ${repo} stayed queued across ${RUNPOOL_STUCK_WAKES} wake cycles, so it no longer counts as work. GitHub reports ${jobs} job(s) for it. The pool is healthy; this run will never start." \
+      "\"Pool\":\"${p}\",\"Repository\":\"${repo}\",\"Run\":\"${id}\",\"Jobs\":\"${jobs}\",\"Fix\":\"gh run cancel ${id} --repo ${repo}\""
+  done
+}

@@ -44,6 +44,13 @@
 # until the window passes. Raise it if this machine starts runners slowly.
 # RUNPOOL_SETTLE_SECS=120
 
+# How many fruitless wake cycles a queued run is given before it stops counting
+# as work. A run can sit `queued` for ever with no jobs attached, and without
+# this the pool wakes for it, finds nothing, idles out and wakes again for as
+# long as the run exists. `doctor` names any run this is holding down, and
+# `status` says how many there are. Set to 0 to disable the guard.
+# RUNPOOL_STUCK_WAKES=3
+
 # Load threshold exposed in structured status. It does not send an alert.
 # Defaults to six times core count, which sits clear of ordinary work.
 # Raise this as the pool grows: a busy pool of N runners reaches about N times

@@ -31,7 +31,7 @@ lib/scheduler.sh     status, doctor, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
 lib/stats.sh         job durations from recorded telemetry, and queue times
                      via contrib/telemetry-join.sh
-tests/               offline test scripts, all four run by CI
+tests/               offline test scripts, every one of them run by CI
 contrib/             optional pieces the user opts into: job hook, webhook notifier,
                      demo status fixture
 skills/runpool/      agent skill for *using* runpool, shipped with the tool
@@ -59,6 +59,16 @@ assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 
 **The consequence is that an agent already loaded is not necessarily an agent that behaves correctly.** A plist rewritten on disk changes nothing until the pool cycles. Anything depending on agent behaviour must therefore read the *loaded* environment with `launchctl print`, not the file. `_rp_agent_traps_signals` is the example, and `_rp_drain_pool` refuses per runner on the strength of it. The file on disk is what somebody intended; the loaded environment is what is true.
 
+## The stuck-queue guard subtracts, it does not suppress
+
+**A queued run that never starts would otherwise wake a pool for ever**, every `RUNPOOL_IDLE_SECS` plus a tick, and nothing reports it because a pool that wakes and stands down is behaving as designed. `_rp_autoscale` therefore computes `queued > held` rather than deciding whether the pool is allowed to wake.
+
+- **Never suppress the pool.** An org pool watches many repositories, and one dead run in one of them must not blind it to the rest. Subtracting is what keeps the blast radius to the single run.
+- **A strike is earned only when `state/pools/<name>.started` has changed** since that run was last judged. That is the only available proof that waking for it achieved nothing. A tick count would give three strikes in three minutes to a pool that cannot start at all, and then refuse it real work once its agents were repaired; elapsed time would punish a laptop that slept through the night with work genuinely queued.
+- **`_rp_stuck_advance`, `_rp_stuck_held` and `_rp_stuck_new_holds` are pure**, for the same reason `_rp_unwatched_repos` is: the rule is only testable at all when it is separate from the caller that needs GitHub.
+- **The job count is corroboration, never a branch.** Zero jobs is the signature of the zombie case and it reads well in the message, but making the decision depend on a second API shape buys nothing the local rule does not already get right.
+- **A held run says nothing on later ticks.** Only `_rp_stuck_new_holds` logs or notifies, or the loop this exists to end is replaced by a line a minute.
+
 ## The reconfiguration lock
 
 **One per-pool lock covers resize and drain, and `up` and autoscale both respect it.** It was originally a resize lock; a drain needs the same exclusion for longer, so the concept widened rather than gaining a second flag to get out of step with.
@@ -80,10 +90,7 @@ Environment, then config file, then built-in default. The config file uses plain
 /bin/bash -n bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
 shellcheck --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
 
-tests/storage-migration.sh
-tests/set-count-guards.sh
-tests/watch-list-staleness.sh
-tests/drain-guards.sh
+for t in tests/*.sh; do "$t" || break; done
 ```
 
 Without shellcheck installed, Docker gives the same result and leaves nothing behind. Skipping the check is how CI goes red unnoticed:
@@ -93,7 +100,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable \
   --severity=warning bin/runpool lib/*.sh contrib/*.sh tests/*.sh install.sh
 ```
 
-**The tests run offline and make no API calls**, which is what makes them safe anywhere. A new test must keep that: fabricate pool configs under a scratch `RUNPOOL_BASE`, stub `gh` where a path needs it, and prefer a guard refused early over one that reaches the network. `tests/set-count-guards.sh` probes its lock case with a mismatched `--if-count` for that reason, since a real resize fetches the runner tarball first.
+**The tests run offline and make no API calls**, which is what makes them safe anywhere. A new test must keep that: fabricate pool configs under a scratch `RUNPOOL_BASE`, stub `gh` where a path needs it, and prefer a guard refused early over one that reaches the network. `tests/set-count-guards.sh` probes its lock case with a mismatched `--if-count` for that reason, since a real resize fetches the runner tarball first. `tests/stuck-queue-guard.sh` stubs `_rp_up` to move the started stamp by a counter rather than the clock, because the rule it exercises turns on that stamp changing and real seconds would mean sleeping through every cycle.
 
 **Test against a scratch directory, never a real installation:**
 
