@@ -81,6 +81,11 @@ _rp_health_check() {
   echo "${now}" >| "${RUNPOOL_HEALTH_STATE}"
   for p in $(_rp_pool_names); do
     _rp_load_pool "${p}" || continue
+    # A pool mid-resize, mid-drain or mid-rename has its registrations being
+    # rewritten, so a check landing in that window can see none and call a
+    # deliberate operation an outage. Whoever holds the lock already knows.
+    # The same predicate autoscale and `up` use.
+    _rp_resize_locked_by_other "${p}" && continue
     gh="$(_rp_gh_runners)"; reg="${gh% *}"; online="${gh#* }"
     running="$(_rp_running_in "${p}" "${POOL_COUNT}")"
     settling=0; _rp_pool_settling "${p}" && settling=1

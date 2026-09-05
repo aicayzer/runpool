@@ -24,6 +24,7 @@ _rp_env_LOG_DIR="${RUNPOOL_LOG_DIR:-}"
 _rp_env_LABEL_NS="${RUNPOOL_LABEL_NS:-}"
 _rp_env_IDLE_SECS="${RUNPOOL_IDLE_SECS:-}"
 _rp_env_STUCK_WAKES="${RUNPOOL_STUCK_WAKES:-}"
+_rp_env_SETTLE_SECS="${RUNPOOL_SETTLE_SECS:-}"
 _rp_env_LOAD_WARN="${RUNPOOL_LOAD_WARN:-}"
 _rp_env_NOTIFY_CMD="${RUNPOOL_NOTIFY_CMD:-}"
 _rp_env_JOB_HOOK="${RUNPOOL_JOB_HOOK:-}"
@@ -48,6 +49,7 @@ set +a
 [ -n "${_rp_env_LABEL_NS}" ]    && RUNPOOL_LABEL_NS="${_rp_env_LABEL_NS}"
 [ -n "${_rp_env_IDLE_SECS}" ]   && RUNPOOL_IDLE_SECS="${_rp_env_IDLE_SECS}"
 [ -n "${_rp_env_STUCK_WAKES}" ] && RUNPOOL_STUCK_WAKES="${_rp_env_STUCK_WAKES}"
+[ -n "${_rp_env_SETTLE_SECS}" ] && RUNPOOL_SETTLE_SECS="${_rp_env_SETTLE_SECS}"
 [ -n "${_rp_env_LOAD_WARN}" ]   && RUNPOOL_LOAD_WARN="${_rp_env_LOAD_WARN}"
 [ -n "${_rp_env_NOTIFY_CMD}" ]  && RUNPOOL_NOTIFY_CMD="${_rp_env_NOTIFY_CMD}"
 [ -n "${_rp_env_JOB_HOOK}" ]    && RUNPOOL_JOB_HOOK="${_rp_env_JOB_HOOK}"
@@ -55,13 +57,13 @@ set +a
 [ -n "${_rp_env_TELEMETRY}" ]   && RUNPOOL_TELEMETRY="${_rp_env_TELEMETRY}"
 [ -n "${_rp_env_DRAIN_TIMEOUT}" ] && RUNPOOL_DRAIN_TIMEOUT="${_rp_env_DRAIN_TIMEOUT}"
 unset _rp_env_BASE _rp_env_CACHE_DIR _rp_env_POOLS_FILE _rp_env_LOG_DIR _rp_env_LABEL_NS \
-      _rp_env_IDLE_SECS _rp_env_STUCK_WAKES _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
+      _rp_env_IDLE_SECS _rp_env_STUCK_WAKES _rp_env_SETTLE_SECS _rp_env_LOAD_WARN _rp_env_NOTIFY_CMD _rp_env_JOB_HOOK \
       _rp_env_HOOK_DIR _rp_env_TELEMETRY _rp_env_DRAIN_TIMEOUT
 
 # Restored values need exporting again: the restore above is a plain assignment
 # and happens after 'set -a' was turned off.
 export RUNPOOL_BASE RUNPOOL_CACHE_DIR RUNPOOL_LOG_DIR RUNPOOL_LABEL_NS RUNPOOL_IDLE_SECS \
-       RUNPOOL_STUCK_WAKES \
+       RUNPOOL_STUCK_WAKES RUNPOOL_SETTLE_SECS \
        RUNPOOL_LOAD_WARN RUNPOOL_NOTIFY_CMD RUNPOOL_JOB_HOOK RUNPOOL_HOOK_DIR RUNPOOL_TELEMETRY \
        RUNPOOL_DRAIN_TIMEOUT \
        RUNPOOL_CONFIG RUNPOOL_POOLS_FILE
@@ -136,7 +138,7 @@ RUNPOOL_IDLE_SECS="${RUNPOOL_IDLE_SECS:-1200}"
 # launchd starts it, and until that lands the pool looks exactly like a broken
 # one: agents up locally, nothing online at GitHub. Judging a pool inside that
 # window reports every healthy start as an outage.
-RUNPOOL_SETTLE_SECS="${RUNPOOL_SETTLE_SECS:-120}"
+RUNPOOL_SETTLE_SECS="${RUNPOOL_SETTLE_SECS:-120}"   # and in the precedence block above
 
 # How many fruitless wake cycles a queued run is given before it stops counting
 # as work. A run can sit `queued` forever with no jobs ever attached, and
