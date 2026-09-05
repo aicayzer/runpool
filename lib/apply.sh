@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# apply.sh — reconcile the machine's pools to a file describing them.
+# apply.sh: reconcile the machine's pools to a file describing them.
 #
 # `register` creates one pool from one command, so a machine's setup exists
 # nowhere except as a sequence somebody ran once. That is fine for one machine
@@ -61,7 +61,7 @@ _rp_parse_pools_file() (
     lineno=$(( lineno + 1 ))
 
     # Comments are stripped per PHYSICAL line, before the trailing '\' is
-    # looked at. The other order — continue first, strip the joined line —
+    # looked at. The other order (continue first, strip the joined line)
     # reads a commented line ending in '\' as a continuation, and the '#'
     # then eats whatever it was joined to. The shipped template taught exactly
     # that: two commented lines, the first ending in '\'. Uncommenting only
@@ -194,13 +194,13 @@ _rp_parse_pools_file() (
       # Refused rather than ignored: silently doing nothing is how a pool ends
       # up never waking and nobody knowing why.
       [ "${scope}" = "org" ] || {
-        _rp_err "${file}:${lineno}: --watch applies to org pools only — a repo pool polls ${target} itself"
+        _rp_err "${file}:${lineno}: --watch applies to org pools only. A repo pool polls ${target} itself"
         return 1
       }
       # Rebuilt from the entries that were actually validated, not stored as
       # written. Splitting on commas drops empty entries before the check, so
       # ',acme-inc/api' and 'a/b,,c/d' passed validation and were then written
-      # to POOL_WATCH verbatim — approving one string and storing another.
+      # to POOL_WATCH verbatim, approving one string and storing another.
       clean=""
       for tok in $(echo "${watch}" | tr ',' ' '); do
         _rp_valid_gh_repo "${tok}" || {
@@ -243,7 +243,7 @@ _rp_apply() {
     esac
   done
 
-  # Present, then not a directory, then readable — three messages rather than
+  # Present, then not a directory, then readable: three messages rather than
   # one, because the three are fixed differently.
   #
   # '-e' and '-r' rather than '-f'. A '-f' test refuses /dev/null, which is the
@@ -252,7 +252,7 @@ _rp_apply() {
   #
   # The readability test is the one that matters. The redirect feeding the
   # parser was unchecked, so a pools file the user could not read parsed as
-  # zero pools and returned 0 — and every pool actually on the machine was then
+  # zero pools and returned 0, and every pool actually on the machine was then
   # reported as '? not in the file', which is the exact inverse of the truth.
   if [ ! -e "${file}" ]; then
     _rp_err "no pools file at ${file}"
@@ -260,14 +260,14 @@ _rp_apply() {
     return 1
   fi
   [ ! -d "${file}" ] || { _rp_err "${file} is a directory, not a pools file"; return 1; }
-  [ -r "${file}" ]   || { _rp_err "cannot read ${file} — check its permissions"; return 1; }
+  [ -r "${file}" ]   || { _rp_err "cannot read ${file}: check its permissions"; return 1; }
 
   # Parsed in full before anything is touched, so a typo on the last line
   # cannot leave the machine half reconciled.
   records="$(_rp_parse_pools_file "${file}")" || return 1
 
   echo "plan from ${file}"
-  [ "${dry}" = "1" ] || echo "  (not a dry run — changes are being made)"
+  [ "${dry}" = "1" ] || echo "  (not a dry run: changes are being made)"
   echo
 
   # ---- pass one: decide everything and print the whole plan ----------------
@@ -282,7 +282,7 @@ _rp_apply() {
   # runner's config.sh and to gh, and anything in the loop body that read stdin
   # would eat the rest of the plan.
   while IFS='|' read -r name scope target count watch allow <&3; do
-    # A file that declares no pools is a valid state, not an error — but an
+    # A file that declares no pools is a valid state, not an error, but an
     # empty record set still feeds one empty line through the printf below,
     # and that reads back as a pool with no name and plans a create for it.
     [ -n "${name}" ] || continue
@@ -308,7 +308,7 @@ _rp_apply() {
     if [ "${scope}" != "${POOL_SCOPE}" ] || [ "${target}" != "${POOL_TARGET}" ]; then
       n_conflict=$(( n_conflict + 1 )); rc=1
       _rp_plan_line "!" "${name}" "${POOL_SCOPE}" "${POOL_TARGET}" \
-        "registered here, but the file says ${scope} ${target} — 'runpool remove ${name}' first"
+        "registered here, but the file says ${scope} ${target}: 'runpool remove ${name}' first"
       continue
     fi
 
@@ -350,7 +350,7 @@ _rp_apply() {
     _rp_load_pool "${p}" || { n_failed=$(( n_failed + 1 )); rc=1; continue; }
     n_absent=$(( n_absent + 1 ))
     _rp_plan_line "?" "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" \
-      "not in the file — left alone ('runpool remove ${p}' to delete it)"
+      "not in the file, left alone ('runpool remove ${p}' to delete it)"
   done
 
   # ---- pass two: act on it ------------------------------------------------
@@ -388,8 +388,8 @@ _rp_apply() {
 
   echo
   echo "  ${n_create} to create, ${n_change} to change, ${n_same} unchanged, ${n_absent} not in the file"
-  [ "${n_conflict}" -gt 0 ] && echo "  ${n_conflict} conflict(s): scope or target differs — see the '!' lines above"
-  [ "${n_failed}" -gt 0 ] && echo "  ${n_failed} failed — see the messages above"
+  [ "${n_conflict}" -gt 0 ] && echo "  ${n_conflict} conflict(s): scope or target differs. See the '!' lines above"
+  [ "${n_failed}" -gt 0 ] && echo "  ${n_failed} failed: see the messages above"
   if [ "${dry}" = "1" ]; then
     echo "  dry run: nothing was changed"
     # A repository's visibility is checked by `register`, which a dry run never

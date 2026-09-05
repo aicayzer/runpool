@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# notify.sh — the optional notifier hook, and the conditions worth reporting.
+# notify.sh: the optional notifier hook, and the conditions worth reporting.
 #
 # runpool detects. It does not deliver. There is no mail sending here, no
 # address routing, no severity policy, no dedup window and no dependency on any

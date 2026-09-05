@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# common.sh — constants, configuration, and helpers shared by every part.
+# common.sh: constants, configuration, and helpers shared by every part.
 #
 # Sourced by bin/runpool. Targets bash 3.2, which is what stock macOS ships,
 # so nothing here may use associative arrays, mapfile, or ${var^^}.
@@ -138,7 +138,7 @@ RUNPOOL_SETTLE_SECS="${RUNPOOL_SETTLE_SECS:-120}"
 # How long `--drain` waits for running jobs to finish before giving up.
 #
 # Derive this from the longest job the pool could serve plus the runner's own
-# teardown — not from how long jobs actually take. A workflow capping jobs at
+# teardown, not from how long jobs actually take. A workflow capping jobs at
 # `timeout-minutes: 60` and a drain bounded at exactly 60 minutes race each
 # other, and the drain loses in the case that matters: a job at 59m50s is
 # still legitimately running, GitHub has not cut it, and the drain times out
@@ -243,7 +243,7 @@ _rp_valid_gh_repo() {
 # thing:
 #
 #   '007' passes a digits-only test, is written to POOL_COUNT verbatim, and
-#   comes back out of _rp_status_json as "count":007 — which Python and Node
+#   comes back out of _rp_status_json as "count":007, which Python and Node
 #   both reject, taking any wrapper reading that JSON down with it.
 #
 #   A twenty-digit count also passes, and then `[ "${count}" -ge 1 ]` prints
@@ -276,8 +276,8 @@ _rp_count_rule() { echo "a runner count is a whole number from 1 to 9999, writte
 # pool's value and got planned against it. A pool silently taking on its
 # neighbour's count, directory or labels is worse than any error.
 #
-# The four fields below are dereferenced without a default all over this tool —
-# POOL_COUNT in arithmetic, POOL_DIR as a path prefix — so a config that
+# The four fields below are dereferenced without a default all over this tool
+# (POOL_COUNT in arithmetic, POOL_DIR as a path prefix), so a config that
 # survived sourcing but defines none of them is refused here rather than
 # somewhere further on.
 # shellcheck disable=SC2034  # every POOL_* here is read by another lib/ fragment
@@ -322,9 +322,9 @@ _rp_agent_loaded() { launchctl list "$1" >/dev/null 2>&1; }
 
 # The program a loaded agent actually names, read from the plist on disk.
 #
-# PlistBuddy reports its own errors on stdout rather than stderr — a missing
+# PlistBuddy reports its own errors on stdout rather than stderr, and a missing
 # file answers "File Doesn't Exist, Will Create: ..." and a missing key answers
-# "Does Not Exist" — so redirecting stderr is not enough to tell an answer from
+# "Does Not Exist", so redirecting stderr is not enough to tell an answer from
 # a complaint. An absolute path is the only thing worth returning.
 _rp_agent_program() {
   local plist="${HOME}/Library/LaunchAgents/$1.plist" program
@@ -423,7 +423,7 @@ _rp_scope_path() {
 #
 # Shared rather than inline because it now has two callers that must agree:
 # `register` reads it once when a pool is created, and `doctor` reads it on
-# every run — the setting can be switched on long after the pool exists.
+# every run: the setting can be switched on long after the pool exists.
 _rp_org_allows_public() {
   local pub
   pub=$(gh api "/orgs/$1/actions/runner-groups" \
@@ -547,7 +547,7 @@ _rp_resize_lock() {
 
   age=$(( $(_rp_now) - $(stat -f %m "${lock}" 2>/dev/null || echo 0) ))
   if [ "${age}" -lt "${RUNPOOL_RESIZE_STALE}" ]; then
-    _rp_err "pool '$1' is already being reconfigured — wait for that to finish, then retry."
+    _rp_err "pool '$1' is already being reconfigured. Wait for that to finish, then retry."
     return 1
   fi
   _rp_log "reconfigure: breaking a stale lock on '$1' (${age}s old)"
@@ -564,7 +564,7 @@ _rp_resize_lock_touch() { touch "$(_rp_resize_lock_dir "$1")" 2>/dev/null; }
 
 # True when some OTHER live process holds the lock. Used by `up` and autoscale,
 # both of which must leave a pool alone while it is being reconfigured, and
-# both of which are also called BY the holder at the end of its own work — so
+# both of which are also called BY the holder at the end of its own work, so
 # testing only for the lock's existence would deadlock a resize against itself.
 #
 # A dead holder is not an obstacle: it left the lock behind and the stale break
@@ -583,7 +583,7 @@ _rp_deregister_runner() {
   [ -f "${runner_dir}/.runner" ] || return 0   # never registered
   id=$(grep -o '"agentId"[[:space:]]*:[[:space:]]*[0-9]*' "${runner_dir}/.runner" 2>/dev/null \
         | grep -o '[0-9]*$')
-  [ -n "${id}" ] || { _rp_err "no agentId in ${runner_dir}/.runner — cannot deregister"; return 1; }
+  [ -n "${id}" ] || { _rp_err "no agentId in ${runner_dir}/.runner, cannot deregister"; return 1; }
   url="$(_rp_scope_path "${scope}" "${target}")/actions/runners/${id}"
   gh api -X DELETE "${url}" >/dev/null 2>&1 || {
     _rp_err "DEREGISTER FAILED: runner id ${id} is still registered on ${target}. Remove it with: gh api -X DELETE ${url}"
@@ -649,7 +649,7 @@ WRAP
 # run.sh and the job dies with it.
 #
 # `launchctl unload` sends SIGTERM and then SIGKILL once ExitTimeOut expires,
-# and the default is around twenty seconds — far shorter than any real job, so
+# and the default is around twenty seconds, far shorter than any real job, so
 # the graceful path above would never get to finish. Six hours is generous
 # enough that launchd never beats a drain to it. Not 0: the man page says zero
 # means infinity and warns it can stall shutdown forever.

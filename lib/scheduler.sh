@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# scheduler.sh — reporting, autoscaling, idle standdown, cleaning, and the
+# scheduler.sh: reporting, autoscaling, idle standdown, cleaning, and the
 # launch agents that drive them.
 #
 # This is what makes on-demand actually hands-off. A push queues a job and the
@@ -21,7 +21,7 @@ _rp_gh_runners() {
 # The one judgement about a pool's registration, as a single token:
 #
 #   unreachable   GitHub could not be asked, so nothing here is a pool fault
-#   unregistered  GitHub has no runners at all — jobs queue forever
+#   unregistered  GitHub has no runners at all, so jobs queue forever
 #   starting      the same shape as 'offline', but the pool came up moments ago
 #   offline       runners are up locally and none has reached GitHub
 #   miscount      GitHub's count differs from what the pool expects
@@ -30,7 +30,7 @@ _rp_gh_runners() {
 # `status` renders this as a note in a table and `doctor` as a check with a
 # remedy attached. They are two presentations of one decision, and a second
 # copy of the decision is a second thing to keep in step with how GitHub
-# actually behaves — which is the part that took three weeks to learn once.
+# actually behaves, which is the part that took three weeks to learn once.
 #
 # The order is load-bearing: '?' has to be tested before anything treats these
 # as numbers, and 'unregistered' before 'miscount', which would otherwise
@@ -183,18 +183,18 @@ _rp_pools() {
     found=1; _rp_load_pool "${p}" || continue
     printf "  %-10s %-4s %-20s count=%s\n" "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}"
   done
-  [ "${found}" = "0" ] && echo "  (no pools registered — 'runpool register <pool> --repo OWNER/REPO')"
+  [ "${found}" = "0" ] && echo "  (no pools registered: 'runpool register <pool> --repo OWNER/REPO')"
   return 0
 }
 
 # ---------------------------------------------------------------------------
-# doctor — "why is nothing picking this up", in one command
+# doctor: "why is nothing picking this up", in one command
 # ---------------------------------------------------------------------------
 # Every check here is answerable today from `status`, the log, and a launchctl
 # invocation nobody thinks to run. The value is having them in one place with a
 # remedy attached, and one of them is answerable from nothing at all: if the
 # tick agent is not loaded, no pool autoscales, every job waits for a manual
-# `runpool up`, and `status` reports every pool as perfectly healthy — because
+# `runpool up`, and `status` reports every pool as perfectly healthy, because
 # locally they are.
 #
 # STRICTLY READ-ONLY, and that is a boundary rather than a preference. A
@@ -211,7 +211,7 @@ _rp_doctor_warns=0
 
 # Four markers, all four characters wide so the messages line up:
 #   OK    nothing to do
-#   INFO  context, or a check that could not be run — not a judgement
+#   INFO  context, or a check that could not be run, not a judgement
 #   WARN  worth knowing, does not fail the command
 #   FAIL  something is actually wrong, and the exit status says so
 # $1 headline, $2 optional remedy on a continuation line.
@@ -356,7 +356,7 @@ _rp_doctor() {
     # every table, exactly like a pool that was never registered.
     pools=$(( pools + 1 ))
     if ! _rp_load_pool "${p}" 2>/dev/null; then
-      _rp_doctor_fail "${p}: $(_rp_pool_conf "${p}") cannot be read, or is missing one of POOL_SCOPE, POOL_TARGET, POOL_COUNT and POOL_DIR — every other command skips this pool silently" \
+      _rp_doctor_fail "${p}: $(_rp_pool_conf "${p}") cannot be read, or is missing one of POOL_SCOPE, POOL_TARGET, POOL_COUNT and POOL_DIR. Every other command skips this pool silently" \
                       "fix: repair the file, or delete it and register the pool again"
       continue
     fi
@@ -379,7 +379,7 @@ _rp_doctor() {
 
     # An org pool with an empty watch list never autoscales. GitHub reports
     # queued runs per repository and not per organisation, so _rp_autoscale has
-    # nothing to poll and the pool waits for a manual 'runpool up' forever —
+    # nothing to poll and the pool waits for a manual 'runpool up' forever,
     # while looking entirely healthy everywhere else, which is exactly the
     # failure this command exists for. Local, free, and no API call.
     [ "${POOL_SCOPE}" = "org" ] && [ -z "${POOL_WATCH:-}" ] && _rp_doctor_fail \
@@ -394,7 +394,7 @@ _rp_doctor() {
     # **It does not decide which repositories should be watched.** A
     # repository at this scope may legitimately route every job to a managed
     # runner, and nothing readable here distinguishes that from one that
-    # meant to reach the pool — the routing lives in a repository variable
+    # meant to reach the pool: the routing lives in a repository variable
     # whose name is a convention of whoever set it up, not of RunPool. So
     # the operator is told the difference and judges it.
     #
@@ -420,7 +420,7 @@ _rp_doctor() {
 
     # "Would a drain work here?" is the question an operator has after every
     # upgrade, and without this the only way to answer it is to attempt the
-    # very thing being checked — on a busy pool, with real jobs at stake.
+    # very thing being checked, on a busy pool, with real jobs at stake.
     #
     # Reported rather than failed: a pool whose runners predate the graceful
     # shutdown setting is running perfectly well and picking up work. Nothing
@@ -437,7 +437,7 @@ _rp_doctor() {
     done
     if [ -n "${drain_stale}" ]; then
       _rp_doctor_note "${p}: runner(s) ${drain_stale} started before graceful shutdown was available, so '--drain' will refuse on them. They run and take work normally; only draining is affected."
-      _rp_doctor_note "${p}: fix: 'runpool rewrite-agents', then let the pool cycle — the idle sweep does this on its own, or 'runpool down ${p}' once it is idle."
+      _rp_doctor_note "${p}: fix: 'runpool rewrite-agents', then let the pool cycle. The idle sweep does this on its own, or 'runpool down ${p}' once it is idle."
     fi
 
     # The reconfiguration lock now refuses `up` and is skipped by autoscale, so
@@ -445,7 +445,7 @@ _rp_doctor() {
     # that silently stops waking. It clears itself on the next attempt, but
     # nothing says so until then.
     if _rp_resize_locked_by_other "${p}"; then
-      _rp_doctor_note "${p}: being reconfigured right now (resize or drain in progress) — it will not autoscale until that finishes"
+      _rp_doctor_note "${p}: being reconfigured right now (resize or drain in progress), so it will not autoscale until that finishes"
     elif [ -d "$(_rp_resize_lock_dir "${p}")" ]; then
       _rp_doctor_warn \
         "${p}: a reconfiguration lock is left over from a resize or drain that did not finish, so the pool will not autoscale" \
@@ -560,7 +560,7 @@ _rp_doctor() {
 
   # The organisation runner-group setting. `register` consults it once, when a
   # pool is created; it can be switched on the day after and nothing would ever
-  # mention it again. Reported and never re-derived — enumerating an
+  # mention it again. Reported and never re-derived: enumerating an
   # organisation's public repositories to work out the same answer is
   # explicitly not RunPool's job. See SECURITY.md.
   if [ "${gh_ok}" = "1" ]; then
@@ -577,7 +577,7 @@ _rp_doctor() {
         false)
           _rp_doctor_ok "${POOL_TARGET}: allows_public_repositories=false on the default runner group" ;;
         *)
-          _rp_doctor_note "${POOL_TARGET}: could not read the runner groups (needs admin:org) — check allows_public_repositories in the organisation's Actions settings" ;;
+          _rp_doctor_note "${POOL_TARGET}: could not read the runner groups (needs admin:org). Check allows_public_repositories in the organisation's Actions settings" ;;
       esac
     done
   fi
@@ -620,7 +620,7 @@ _rp_unwatched_repos() {
 }
 
 # ---------------------------------------------------------------------------
-# autoscale — bring a pool up when it has queued work
+# autoscale: bring a pool up when it has queued work
 # ---------------------------------------------------------------------------
 # Only DOWN pools are polled: one that is already up is serving, so during
 # active work this makes no API calls at all. An org pool polls the repos named
@@ -651,14 +651,14 @@ _rp_autoscale() {
     fi
     case "${queued}" in ''|*[!0-9]*) queued=0 ;; esac
     if [ "${queued}" -gt 0 ]; then
-      _rp_log "autoscale: '${p}' has ${queued} queued job(s) — bringing up"
+      _rp_log "autoscale: '${p}' has ${queued} queued job(s), bringing up"
       _rp_up "${p}"
     fi
   done
 }
 
 # ---------------------------------------------------------------------------
-# sweep — stand pools down once nothing has run for a while
+# sweep: stand pools down once nothing has run for a while
 # ---------------------------------------------------------------------------
 _rp_sweep() {
   local p busy_total=0 any_loaded=0 last idle
@@ -673,13 +673,13 @@ _rp_sweep() {
   last=$(cat "${RUNPOOL_ACTIVITY}" 2>/dev/null || echo 0)
   idle=$(( $(_rp_now) - last ))
   if [ "${idle}" -ge "${RUNPOOL_IDLE_SECS}" ]; then
-    _rp_log "sweep: idle ${idle}s, threshold ${RUNPOOL_IDLE_SECS}s — standing all pools down"
+    _rp_log "sweep: idle ${idle}s, threshold ${RUNPOOL_IDLE_SECS}s, standing all pools down"
     _rp_down_all --force
   fi
 }
 
 # ---------------------------------------------------------------------------
-# clean — prune accumulated state (skips any pool with a job running)
+# clean: prune accumulated state (skips any pool with a job running)
 # ---------------------------------------------------------------------------
 # Persistent runners never clean up after themselves, which is the price of
 # warm caches. Everything here is either regenerable or already collected
@@ -693,7 +693,7 @@ _rp_clean() {
     [ -n "${only}" ] && [ "${only}" != "${p}" ] && continue
     _rp_load_pool "${p}" || continue
     if [ "$(_rp_busy_in "${POOL_DIR}")" -gt 0 ]; then
-      _rp_log "clean: '${p}' has a job running — skipping"; continue
+      _rp_log "clean: '${p}' has a job running, skipping"; continue
     fi
     # Every runner directory that exists, not 1..POOL_COUNT: a pool whose count
     # was lowered leaves higher-numbered directories behind, and counting to
@@ -838,7 +838,7 @@ _rp_clean_if_overdue() {
   last=$(cat "${RUNPOOL_LAST_CLEAN}" 2>/dev/null || echo 0)
   age=$(( $(_rp_now) - last ))
   if [ "${age}" -ge 86400 ]; then
-    _rp_log "clean: overdue by $(( age / 3600 ))h and pools are idle — running now"
+    _rp_log "clean: overdue by $(( age / 3600 ))h and pools are idle, running now"
     _rp_clean ""
   fi
 }
@@ -873,7 +873,7 @@ _rp_tick() {
 }
 
 # ---------------------------------------------------------------------------
-# pause / resume — global kill switch, default resumed
+# pause / resume: global kill switch, default resumed
 # ---------------------------------------------------------------------------
 _rp_pause() {
   local name="${1:-}" busy
@@ -887,7 +887,7 @@ _rp_pause() {
   _rp_pool_paused "${name}" && { _rp_log "Pool '${name}' is already paused."; return 0; }
   busy="$(_rp_busy_in "${POOL_DIR}")"
   if [ "${busy}" -gt 0 ]; then
-    _rp_err "'${name}' has ${busy} job(s) running — refusing to pause. Wait for them to finish, then retry."
+    _rp_err "'${name}' has ${busy} job(s) running, so refusing to pause. Wait for them to finish, then retry."
     return 1
   fi
   : >| "$(_rp_pool_pause_flag "${name}")"
@@ -909,7 +909,7 @@ _rp_resume() {
 }
 
 # ---------------------------------------------------------------------------
-# schedule — install or remove the background agents
+# schedule: install or remove the background agents
 # ---------------------------------------------------------------------------
 _rp_write_cron_plist() {
   local label="$1" arg="$2" interval_key="$3" interval_val="$4" bin="$5"

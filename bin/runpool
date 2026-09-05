@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# runpool — on-demand self-hosted GitHub Actions runner pools for macOS.
+# runpool: on-demand self-hosted GitHub Actions runner pools for macOS.
 #
 # A pool is a set of runners bound to one GitHub scope. Pools come up when jobs
 # queue and stand down when nothing has run for a while, so nothing sits in the

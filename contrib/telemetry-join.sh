@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# telemetry-join.sh — one row per job, with everything needed to reason about
+# telemetry-join.sh: one row per job, with everything needed to reason about
 # runner count. Joins local telemetry to what GitHub knows about the same run.
 #
 # This deliberately does no analysis. It plumbs, and leaves the thinking to
