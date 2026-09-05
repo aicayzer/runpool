@@ -131,11 +131,11 @@ _rp_parse_pools_file() (
     esac
     declared="${declared}${name} "
 
-    scope=""; target=""; count="2"; watch=""; allow="0"
+    scope=""; target=""; count="2"; watch=""; labels=""; allow="0"
     while [ $# -gt 0 ]; do
       tok="$1"
       case "${tok}" in
-        --org|--repo|--count|--watch)
+        --org|--repo|--count|--watch|--labels)
           # Checked before shifting two. 'shift 2' with one argument left is a
           # failure that does not shift, which turns this into an infinite loop
           # rather than an error.
@@ -150,6 +150,7 @@ _rp_parse_pools_file() (
               ;;
             --count) count="${val}" ;;
             --watch) watch="${watch},${val}" ;;
+            --labels) labels="${labels},${val}" ;;
           esac
           ;;
         --allow-public) allow="1"; shift ;;        *) _rp_err "${file}:${lineno}: unknown field '${tok}'"; return 1 ;;
@@ -210,7 +211,31 @@ _rp_parse_pools_file() (
       watch="${clean#,}"
     fi
 
-    printf '%s|%s|%s|%s|%s|%s\n' "${name}" "${scope}" "${target}" "${count}" "${watch}" "${allow}"
+    # Extra labels only. The base three and the pool's own name are on every
+    # runner regardless, so naming one here is refused rather than dropped, for
+    # the reason register states: a token accepted and then normalised away
+    # would leave declared and derived permanently unequal and re-register the
+    # pool on every apply. Rebuilt from what was validated, like the watch list
+    # above and for the same reason.
+    labels="${labels#,}"; labels="${labels// /}"
+    if [ -n "${labels}" ]; then
+      clean=""
+      for tok in $(echo "${labels}" | tr ',' ' '); do
+        _rp_valid_label "${tok}" || {
+          _rp_err "${file}:${lineno}: --labels: $(_rp_label_rule), got '${tok}'"; return 1; }
+        case ",${RUNPOOL_BASE_LABELS},${name}," in
+          *",${tok},"*) _rp_err "${file}:${lineno}: --labels: '${tok}' is on every runner in this pool already and cannot be given again"; return 1 ;;
+        esac
+        case ",${clean}," in *",${tok},"*) continue ;; esac
+        clean="${clean},${tok}"
+      done
+      labels="${clean#,}"
+    fi
+
+    # Labels are APPENDED as a seventh field rather than inserted. An empty
+    # field in the middle is fine, which is why '|' beat a tab, but reordering
+    # would silently shift every variable in both reads below.
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "${name}" "${scope}" "${target}" "${count}" "${watch}" "${allow}" "${labels}"
     count_declared=$(( count_declared + 1 ))
   done < "${file}" || { _rp_err "${file}: could not be read"; return 1; }
 
@@ -229,8 +254,8 @@ _rp_plan_line() { printf "  %s %-12s %-4s %-24s %s\n" "$1" "$2" "$3" "$4" "$5"; 
 _rp_apply() {
   # Every local declared once, at the top.
   local dry=0 file="${RUNPOOL_POOLS_FILE}" records actions="" rc=0 seen=" " \
-        name scope target count watch allow verb chg_count chg_watch \
-        have_count have_watch what p \
+        name scope target count watch allow labels verb chg_count chg_watch chg_labels \
+        have_count have_watch have_labels what p n_reregister=0 \
         n_create=0 n_change=0 n_same=0 n_conflict=0 n_absent=0 n_failed=0
 
   while [ $# -gt 0 ]; do
@@ -281,7 +306,7 @@ _rp_apply() {
   # Records arrive on fd 3 rather than stdin. `register` shells out to the
   # runner's config.sh and to gh, and anything in the loop body that read stdin
   # would eat the rest of the plan.
-  while IFS='|' read -r name scope target count watch allow <&3; do
+  while IFS='|' read -r name scope target count watch allow labels <&3; do
     # A file that declares no pools is a valid state, not an error, but an
     # empty record set still feeds one empty line through the printf below,
     # and that reads back as a pool with no name and plans a create for it.
@@ -292,9 +317,10 @@ _rp_apply() {
       n_create=$(( n_create + 1 ))
       what="create with ${count} runner(s)"
       [ -n "${watch}" ] && what="${what}, watching ${watch}"
+      [ -n "${labels}" ] && what="${what}, labelled ${labels}"
       [ "${allow}" = "1" ] && what="${what} [--allow-public]"
       _rp_plan_line "+" "${name}" "${scope}" "${target}" "${what}"
-      actions="${actions}create|${name}|${scope}|${target}|${count}|${watch}|${allow}|0|0
+      actions="${actions}create|${name}|${scope}|${target}|${count}|${watch}|${allow}|${labels}|0|0|0
 "
       continue
     fi
@@ -321,13 +347,30 @@ _rp_apply() {
     # not recorded anywhere: it is permission to perform a create, consulted
     # once by `register` and meaningless afterwards. Adding or removing it on a
     # pool that already exists changes nothing, so '=' is the truthful answer.
-    chg_count=0; chg_watch=0
+    # Derived from POOL_LABELS every time rather than stored beside it, so a
+    # config somebody has edited by hand is respected rather than reverted.
+    have_labels="$(_rp_extra_labels "${POOL_LABELS:-}" "${name}")"
+
+    chg_count=0; chg_watch=0; chg_labels=0
     what=""
     [ "${count}" != "${have_count}" ] && { chg_count=1; what="count ${have_count} -> ${count}"; }
     if [ "${watch}" != "${have_watch}" ]; then
       chg_watch=1
       [ -n "${what}" ] && what="${what}; "
       what="${what}watch ${have_watch:-(none)} -> ${watch:-(none)}"
+    fi
+    # Compared sorted while stored in the order declared, unlike the watch list
+    # just above. The asymmetry is deliberate and the cost is not symmetric: a
+    # spurious watch difference costs one file write, a spurious label
+    # difference stands the whole pool down and re-registers every runner.
+    if [ "$(_rp_sorted_labels "${labels}")" != "$(_rp_sorted_labels "${have_labels}")" ]; then
+      chg_labels=1
+      n_reregister=$(( n_reregister + 1 ))
+      [ -n "${what}" ] && what="${what}; "
+      what="${what}labels ${have_labels:-(none)} -> ${labels:-(none)}"
+      # Say what stops matching, not just what changed. A label removed here is
+      # a workflow that queues for ever against a pool reporting perfect health.
+      [ -n "${have_labels}" ] && what="${what} (a workflow using 'runs-on: [self-hosted, ${have_labels%%,*}]' stops matching)"
     fi
 
     if [ -z "${what}" ]; then
@@ -338,7 +381,7 @@ _rp_apply() {
 
     n_change=$(( n_change + 1 ))
     _rp_plan_line "~" "${name}" "${scope}" "${target}" "${what}"
-    actions="${actions}change|${name}|${scope}|${target}|${count}|${watch}|0|${chg_count}|${chg_watch}
+    actions="${actions}change|${name}|${scope}|${target}|${count}|${watch}|0|${labels}|${chg_count}|${chg_watch}|${chg_labels}
 "
   done 3< <(printf '%s\n' "${records}")
 
@@ -357,7 +400,7 @@ _rp_apply() {
   if [ "${dry}" != "1" ] && [ -n "${actions}" ]; then
     echo
     echo "  applying:"
-    while IFS='|' read -r verb name scope target count watch allow chg_count chg_watch <&3; do
+    while IFS='|' read -r verb name scope target count watch allow labels chg_count chg_watch chg_labels <&3; do
       [ -n "${verb}" ] || continue
       case "${verb}" in
         create)
@@ -369,10 +412,24 @@ _rp_apply() {
           # which left a window in which a create could succeed and the watch
           # list never arrive.
           [ -n "${watch}" ] && set -- "$@" --watch "${watch}"
+          [ -n "${labels}" ] && set -- "$@" --labels "${labels}"
           [ "${allow}" = "1" ] && set -- "$@" --allow-public
           _rp_register "$@" || { n_failed=$(( n_failed + 1 )); rc=1; }
           ;;
         change)
+          # Labels first, and much the heaviest of the three: they live on
+          # GitHub's registration, so changing them means standing the pool
+          # down and re-registering every runner. The config is written before
+          # that, because _rp_reregister reads POOL_LABELS back through
+          # _rp_load_pool; if the write lands and the re-register does not,
+          # 'runpool reregister <pool>' finishes the job.
+          if [ "${chg_labels}" = "1" ]; then
+            if _rp_write_pool_labels "${name}" "$(_rp_pool_labels "${name}" "${labels}")"; then
+              _rp_reregister "${name}" || { n_failed=$(( n_failed + 1 )); rc=1; }
+            else
+              n_failed=$(( n_failed + 1 )); rc=1
+            fi
+          fi
           if [ "${chg_watch}" = "1" ]; then
             _rp_write_pool_watch "${name}" "${watch}" || { n_failed=$(( n_failed + 1 )); rc=1; }
           fi
@@ -388,6 +445,7 @@ _rp_apply() {
 
   echo
   echo "  ${n_create} to create, ${n_change} to change, ${n_same} unchanged, ${n_absent} not in the file"
+  [ "${n_reregister}" -gt 0 ] && echo "  ${n_reregister} pool(s) will be re-registered: a label change recreates every runner's registration with GitHub and leaves the pool stopped"
   [ "${n_conflict}" -gt 0 ] && echo "  ${n_conflict} conflict(s): scope or target differs. See the '!' lines above"
   [ "${n_failed}" -gt 0 ] && echo "  ${n_failed} failed: see the messages above"
   if [ "${dry}" = "1" ]; then

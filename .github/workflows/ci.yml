@@ -55,3 +55,7 @@ jobs:
         run: tests/pool-settling-window.sh
       - name: stuck queue guard
         run: tests/stuck-queue-guard.sh
+      - name: pool labels
+        run: tests/pool-labels.sh
+      - name: pool rename
+        run: tests/pool-rename.sh

@@ -50,6 +50,14 @@ runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
 
 Then set the repository variable `CI_RUNNER` to `self-hosted`. The fallback keeps the workflow working for anyone without the pool, and the variable means switching back to hosted is one setting rather than a commit.
 
+**A pool can carry extra labels, and `runs-on` can ask for them.** Every runner carries `self-hosted`, the machine's OS and architecture, and the pool's own name; `register --labels` and the pools file add to that. A job wanting a particular capability then asks for it:
+
+```yaml
+runs-on: ${{ vars.CI_RUNNER == 'self-hosted' && fromJSON('["self-hosted", "xcode"]') || 'macos-latest' }}
+```
+
+`runpool pools` shows a pool's extra labels, which is how to answer "why does my `runs-on` not match" without reading a config file. **Declare them in the pools file too**, or the next `apply` removes them: absent `--labels` means none, and applying that stands the pool down and re-registers every runner without the label.
+
 **Never add an automatic fallback to hosted runners.** On macOS that silently costs ten times as much, and if the hosted allowance is exhausted it fails anyway. A job waiting for a pool that is down is the correct behaviour.
 
 Keep publish, deploy and OIDC jobs hosted regardless: npm provenance requires it.
@@ -131,7 +139,7 @@ It works down the whole list below in one pass, prints a remedy against each fai
 **Three situations `doctor` deliberately reports as healthy, because they are.**
 
 - **`running 0/N` with a job genuinely queued:** the tick brings a pool up within about a minute. Wait before intervening; `runpool up <pool>` forces it.
-- **A clean report and the job still waits:** the problem is routing, not capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's. RunPool controls only whether the runners are up and cannot see either.
+- **A clean report and the job still waits:** the problem is routing, not capacity. The workflow's `runs-on` may not resolve to `self-hosted`, or its labels may not match the pool's, which `runpool pools` will show you. RunPool controls only whether the runners are up and cannot see either.
 - **a run held down and the rest of the queue moving:** intended. The guard subtracts held runs from the queued count rather than silencing the pool, and a run that is merely waiting its turn behind another gets a fresh chance once a day.
 
 ```bash
@@ -142,6 +150,24 @@ tail -50 ~/Library/Logs/runpool/runpool.log
 ```
 
 The JSON carries each pool's watched repositories and the paths to its logs, so a wrapper never has to guess either. **The root `paused` field is global; each pool has its own `paused` boolean.** Read both: a paused pool is intentional state, not an unreachable runner.
+
+## Renaming a pool
+
+```bash
+runpool rename <old> <new> [--drain]
+```
+
+Moves the pool's directories, config, launch agents and state, then re-registers every runner with GitHub under the new name. `--drain` lets running jobs finish first; without it a busy pool is refused.
+
+**The pool name is one of its runners' labels, so this is a routing change.** Any workflow with `runs-on: [self-hosted, <old>]` stops matching and has to be updated. One asking only for `self-hosted` is unaffected.
+
+Do it in this order, and the middle step is the one people forget:
+
+1. `runpool rename <old> <new>` on each machine that hosts the pool.
+2. Update any workflow whose `runs-on` names the old pool.
+3. Update the pools file, or the next `runpool apply` sees a pool it does not recognise and creates the old one again.
+
+The old GitHub registrations are deleted rather than replaced, because `--replace` only covers a name collision and the name is exactly what changed. A registration left behind would sit permanently offline while still advertising the old label, which is a job queued for ever against a runner that will never answer.
 
 ## Capacity
 
@@ -194,4 +220,5 @@ RunPool ships with **no notifier** and works fully without one. Set `RUNPOOL_NOT
 - **Pool names are validated at `register`**: letters, digits, dot, underscore and hyphen. The name becomes a directory, a launch-agent label and a JSON field, so anything else is refused rather than sanitised.
 - **All runners share one HOME**, so each needs its own package store and cache. runpool sets this in the launch agent; if you hand-edit an agent, preserve it or concurrent installs collide.
 - **Ephemeral macOS VMs are capped at two per machine** by Apple's licence. If someone suggests Tart, Tartelet or Cilicon for more than two parallel macOS jobs, that ceiling is why it will not work.
+- **The pool name is a runner label, not just a local identifier.** It is part of the routing contract, which is why renaming a pool is a change to every workflow that names it and not an act of tidying.
 - **Nothing watches RunPool itself.** This is an accepted gap, not an oversight. Do not build a heartbeat for it.

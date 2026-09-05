@@ -23,6 +23,7 @@
 #   <name>  --org ORG | --repo OWNER/REPO
 #           [--count N]              runners in the pool; default 2
 #           [--watch OWNER/REPO,...] org pools only, see below
+#           [--labels LABEL,...]     extra runner labels, see below
 #           [--allow-public]         repo pools only, and only consulted when
 #                                    the pool is created
 #
@@ -41,6 +42,23 @@
 # applied, because the runners are registered against the old one. Remove the
 # pool and apply again.
 
+# --labels adds to what every runner in the pool carries already: self-hosted,
+# the machine's OS and architecture, and the pool's own name. It cannot replace
+# them, because GitHub assigns the first three whatever it is told, and the
+# pool name is the routing contract. Naming one of them here is an error rather
+# than a no-op.
+#
+# A label is letters, digits, dot, underscore and hyphen. That is narrower than
+# GitHub allows, and deliberately: this file is word-split, and the value is
+# written into a config file that every command SOURCES, so a space, a quote or
+# a '$' would be a broken pool or worse. 'xcode-16.2' works; 'xcode 16' cannot.
+#
+# Applying a label change is the heaviest thing in this file. Labels live on
+# GitHub's registration, so `apply` stands the pool down and re-registers every
+# runner. Absent --labels means no extra labels, so a pool whose config was
+# edited by hand to add one needs it declared here, or the next apply takes it
+# away and whatever routed to it queues for ever.
+
 # ---------------------------------------------------------------------------
 # An organisation pool. Every repository in the org can use these runners.
 # ---------------------------------------------------------------------------
@@ -53,7 +71,8 @@
 # A repo pool needs no --watch. It polls its own target, and giving it one is
 # refused rather than ignored.
 
-# acme  --org acme-inc --count 4 --watch acme-inc/api, acme-inc/web
+# acme  --org acme-inc --count 4 --watch acme-inc/api, acme-inc/web \
+#       --labels xcode
 
 # Long lists are easier to read split across lines. Uncomment every line of it
 # or none of them:
