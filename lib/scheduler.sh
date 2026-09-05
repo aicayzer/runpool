@@ -195,10 +195,16 @@ _rp_status_json() {
 }
 
 _rp_pools() {
-  local p found=0
+  local p found=0 extras
   for p in $(_rp_pool_names); do
     found=1; _rp_load_pool "${p}" || continue
-    printf "  %-10s %-4s %-20s count=%s\n" "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}"
+    # Extra labels shown, the implicit ones not: every runner carries
+    # self-hosted, the OS, the architecture and the pool name, so printing them
+    # would be noise on every line. Without this, "why does my runs-on not
+    # match" cannot be answered without reading the config by hand.
+    extras="$(_rp_extra_labels "${POOL_LABELS:-}" "${p}")"
+    printf "  %-10s %-4s %-20s count=%s%s\n" "${p}" "${POOL_SCOPE}" "${POOL_TARGET}" "${POOL_COUNT}" \
+      "${extras:+  labels=${extras}}"
   done
   [ "${found}" = "0" ] && echo "  (no pools registered: 'runpool register <pool> --repo OWNER/REPO')"
   return 0

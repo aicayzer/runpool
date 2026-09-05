@@ -277,6 +277,72 @@ _rp_valid_count() {
 # rule differently.
 _rp_count_rule() { echo "a runner count is a whole number from 1 to 9999, written without a leading zero"; }
 
+# ---------------------------------------------------------------------------
+# Runner labels
+# ---------------------------------------------------------------------------
+# GitHub gives every self-hosted runner these three whatever `config.sh` is
+# told, so they are structural rather than ours to choose. RunPool contributes
+# the pool name and whatever `--labels` adds.
+RUNPOOL_BASE_LABELS="self-hosted,macOS,ARM64"
+
+# The same character class as a pool name, and for sharper reasons. A label
+# reaches four hazardous places: POOL_LABELS is written into a config file that
+# every command SOURCES, so a '$' or a backtick there is command execution on
+# every invocation and on every 60-second tick; `apply` separates its records
+# with '|'; the pools file is tokenised by word splitting, so whitespace
+# silently becomes two fields; and `rename` matches plists with `find -name`.
+# One rule closes all four. The 256 is GitHub's own cap, enforced here because
+# past it `config.sh` fails deep inside the runner's own log.
+_rp_valid_label() {
+  case "$1" in
+    ''|.|..)           return 1 ;;
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 256 ] || return 1
+  return 0
+}
+_rp_label_rule() { echo "a label is letters, digits, dot, underscore and hyphen, up to 256 characters, and several are separated by commas without spaces"; }
+
+# The full list handed to config.sh, and its inverse.
+#
+# POOL_LABELS holds the whole list because that is what config.sh needs and
+# what anyone reading the config wants to see. The extras are DERIVED from it
+# every time rather than stored alongside it: the config is hand-editable, and
+# a second field would be a frozen copy of a cheap pure function that goes
+# stale the moment somebody edits the first one, which is the very defect this
+# feature exists to fix.
+#
+# $1 pool name, $2 extras (may be empty).
+_rp_pool_labels() {
+  if [ -n "${2:-}" ]; then echo "${RUNPOOL_BASE_LABELS},$1,$2"; else echo "${RUNPOOL_BASE_LABELS},$1"; fi
+}
+
+# $1 the stored list, $2 the pool name. Tolerant on purpose: a hand-edited
+# config may hold anything, and this must never fail, only filter. Strictness
+# belongs on the way in, in _rp_valid_label.
+#
+# The pool name's FIRST occurrence is what gets removed, not every one. A pool
+# named 'xcode' carrying a genuine 'xcode' label would otherwise lose it on
+# rename, and one occurrence is by definition the name label.
+_rp_extra_labels() {
+  local list="$1" name="$2" tok out="" seen_name=0
+  for tok in $(echo "${list}" | tr ',' ' '); do
+    _rp_valid_label "${tok}" || continue
+    case ",${RUNPOOL_BASE_LABELS}," in *",${tok},"*) continue ;; esac
+    if [ "${tok}" = "${name}" ] && [ "${seen_name}" = "0" ]; then seen_name=1; continue; fi
+    case ",${out}," in *",${tok},"*) continue ;; esac
+    out="${out}${out:+,}${tok}"
+  done
+  echo "${out}"
+}
+
+# For comparison only, never for storage. `apply` compares what the pools file
+# declares against what the config holds, and an order difference there would
+# re-register the whole pool for nothing.
+_rp_sorted_labels() {
+  echo "$1" | tr ',' '\n' | grep -v '^$' | sort | tr '\n' ',' | sed 's/,$//'
+}
+
 # Load POOL_* for pool $1 into the caller's scope. POOL_WATCH is set only on
 # org pools, so every reader still uses "${POOL_WATCH:-}".
 #

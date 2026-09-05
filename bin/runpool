@@ -43,7 +43,7 @@ export RUNPOOL_INVOKED
 # The released version, and the only place it is written. The Homebrew formula
 # builds from a git tag, so a tag without a matching bump here ships a binary
 # that misreports itself.
-RUNPOOL_VERSION="0.11.0"
+RUNPOOL_VERSION="0.12.0"
 
 # shellcheck source=lib/common.sh
 . "${RUNPOOL_ROOT}/lib/common.sh"
@@ -83,6 +83,7 @@ Commands:
   pools                         List registered pools
   stats [options]               Show recorded job durations and queue times
   reregister <pool>             Recreate a pool's GitHub registrations
+  rename <old> <new>            Rename a pool, locally and at GitHub
   remove <pool>                 Deregister and delete a pool
   tick                          Run autoscaling and pool health checks
   autoscale                     Bring pools up when work is queued
@@ -110,7 +111,32 @@ Options:
   --org ORG                     Register an organisation-scoped pool
   --count <n>                   Set the runner count (default: 2)
   --watch OWNER/REPO,...        Repositories an organisation pool watches for work
+  --labels LABEL,...            Extra runner labels, on top of self-hosted, macOS, ARM64
+                                and the pool's own name. Letters, digits, dot,
+                                underscore and hyphen; several separated by commas
   --allow-public                Allow a public repository (repository scope only)
+HELP
+      ;;
+    rename)
+      cat <<'HELP'
+Usage: runpool rename <old> <new> [options]
+
+Rename a pool. Moves its directories, config, launch agents and state, then
+re-registers every runner with GitHub under the new name.
+
+Options:
+  --drain                       Let running jobs finish first, then rename
+  --timeout <seconds>           How long --drain waits
+
+The pool name is one of the runner's labels, so 'runs-on: [self-hosted, <old>]'
+stops matching and has to be changed to the new name. A workflow asking only
+for 'self-hosted' is unaffected.
+
+The old GitHub registrations are deleted rather than replaced, because
+--replace only covers a name collision and the name is what is changing.
+
+The pools file is not touched. Update it too, or the next 'runpool apply' will
+create the old pool again.
 HELP
       ;;
     set-count)
@@ -234,6 +260,7 @@ case "${cmd}" in
   set-count)      _rp_set_count "$@" ;;
   apply)          _rp_apply "$@" ;;
   reregister)     _rp_reregister "$@" ;;
+  rename)         _rp_rename "$@" ;;
   up)             _rp_up "$@" ;;
   down)           _rp_down "$@" ;;
   up-all)         _rp_up_all ;;

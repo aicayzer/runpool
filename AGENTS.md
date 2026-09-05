@@ -25,7 +25,7 @@ Break any of these and the tool stops being what it is.
 ```
 bin/runpool          the executable, its dispatcher, its help text, and RUNPOOL_VERSION
 lib/common.sh        config, logging, pool loading, launch agents, deregistration
-lib/lifecycle.sh     register, set-count, up, down, reregister, remove
+lib/lifecycle.sh     register, set-count, up, down, reregister, rename, remove
 lib/apply.sh         the pools file, and reconciling the machine to it
 lib/scheduler.sh     status, doctor, autoscale, sweep, clean, schedule
 lib/notify.sh        the optional notifier hook and what triggers it
@@ -59,6 +59,24 @@ assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 
 **The consequence is that an agent already loaded is not necessarily an agent that behaves correctly.** A plist rewritten on disk changes nothing until the pool cycles. Anything depending on agent behaviour must therefore read the *loaded* environment with `launchctl print`, not the file. `_rp_agent_traps_signals` is the example, and `_rp_drain_pool` refuses per runner on the strength of it. The file on disk is what somebody intended; the loaded environment is what is true.
 
+## The pool name is a label
+
+**`POOL_LABELS` is the full list handed to `config.sh`, and the extras are derived back out of it.** There is deliberately no `POOL_EXTRA_LABELS`. A second field would be a frozen copy of `_rp_extra_labels`, and configs get edited by hand: the copy would go stale on the next hand edit and the following `apply` would silently revert it, which is the very defect `--labels` exists to fix.
+
+- **`--labels` appends and cannot replace.** GitHub assigns `self-hosted`, the OS and the architecture to every self-hosted runner whatever it is told, so a replacing flag would promise something GitHub overrides. The pool name is in the base set too, because it is the routing contract.
+- **An implicit label is refused, not dropped.** A token accepted and then normalised away would leave what the pools file declares and what the config holds permanently unequal, and `apply` would re-register the pool on every run.
+- **Extras are compared sorted and stored in declared order.** Unlike `--watch`, which is compared as written: the costs are not symmetric, because a spurious watch difference is one file write and a spurious label difference stands the whole pool down.
+- **`_rp_extra_labels` is tolerant and `_rp_valid_label` is strict.** The first runs against whatever a human left in a config and must only filter; the second guards the way in. That character class is what keeps a sourced config safe, `apply`'s `|` separator intact, and `rename`'s `find -name` free of globs.
+
+## Renaming moves, and must deregister
+
+**`rename` uses `mv`, unlike `migrate-storage`, which copies.** The copy there is because it crosses storage roots, where a partial copy is real and the old tree is the safety net. A rename keeps the same parent by construction, so `mv` is atomic and a second on-disk copy of runner credentials buys nothing.
+
+- **It holds two locks, old then new, released in reverse.** From the moment the new config exists, `_rp_pool_names` returns it and autoscale would start it mid-rename. The second acquisition failing has to release the first.
+- **`config.sh --replace` cannot help.** It replaces a registration of the same name, and the name is what changes, so GitHub keeps the old one: permanently offline, still carrying the old pool name as a label, and unreachable afterwards because `config.sh` overwrites the `.runner` holding its `agentId`. The old registrations are therefore deleted explicitly, before reconfiguring.
+- **It iterates the runner directories that exist, not `1..POOL_COUNT`.** A count lowered by hand leaves higher-numbered runners on disk and registered; those are deregistered and deliberately not re-registered, which would be a permanent `miscount`.
+- **`_rp_migrate_update_pool_conf` is not reusable here.** Its `END` clause adds `POOL_CACHE_DIR` when absent, and that absence is exactly how `_rp_load_pool` recognises a legacy pool. `rename` writes its own config instead, in one write, omitting the field when the pool did not have it.
+
 ## The stuck-queue guard subtracts, it does not suppress
 
 **A queued run that never starts would otherwise wake a pool for ever**, every `RUNPOOL_IDLE_SECS` plus a tick, and nothing reports it because a pool that wakes and stands down is behaving as designed. `_rp_autoscale` therefore computes `queued > held` rather than deciding whether the pool is allowed to wake.
@@ -75,6 +93,7 @@ assets/icon.svg      the icon, source of truth; PNGs are rendered from it
 
 - **The holder writes its pid into the lock.** `_rp_set_count_locked` calls `_rp_up` at the end of its own work while still holding the lock, so a test for mere existence would deadlock every resize against itself. `_rp_resize_locked_by_other` is the predicate to use.
 - **Staleness is measured from the lock's mtime**, and a drain refreshes it every poll. So an old lock means nobody is tending it, not that the work is slow. Anything that can hold the lock for a long time must call `_rp_resize_lock_touch`.
+- **`rename` holds two, old then new, released in reverse.** The lock directory carries the pool name, so one lock cannot cover both. They cannot deadlock, because `_rp_resize_lock` refuses rather than blocks, and the second acquisition failing must release the first.
 - **A dead holder is not an obstacle.** It left the directory behind, and the stale break in `_rp_resize_lock` is what clears it.
 
 ## Configuration precedence

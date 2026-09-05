@@ -15,17 +15,17 @@ _rp_register() {
   _rp_require tar  || return 1
 
   local name="${1:-}"; [ $# -gt 0 ] && shift
-  [ -n "${name}" ] || { _rp_err "usage: runpool register <pool> --repo OWNER/REPO|--org ORG [--count N] [--watch OWNER/REPO,...] [--allow-public]"; return 1; }
+  [ -n "${name}" ] || { _rp_err "usage: runpool register <pool> --repo OWNER/REPO|--org ORG [--count N] [--watch OWNER/REPO,...] [--labels LABEL,...] [--allow-public]"; return 1; }
   _rp_valid_pool_name "${name}" || {
     _rp_err "invalid pool name: '${name}'"
     _rp_err "Letters, digits, dot, underscore and hyphen only: the name becomes a directory, a launch-agent label and a JSON field."
     return 1
   }
 
-  local scope="" target="" count="2" watch="" clean="" tok allow_public=0 vis=""
+  local scope="" target="" count="2" watch="" labels="" clean="" tok allow_public=0 vis=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo|--org|--count|--watch)
+      --repo|--org|--count|--watch|--labels)
         # Checked before shifting two, the same way lib/apply.sh checks it.
         # Without this 'runpool register zz --org' died on a raw '$2: unbound
         # variable' with an internal line number and no usage message.
@@ -38,6 +38,7 @@ _rp_register() {
           # vocabulary means the same flag given twice means the same thing
           # in both places.
           --watch) watch="${watch},$2" ;;
+          --labels) labels="${labels},$2" ;;
         esac
         shift 2
         ;;
@@ -76,6 +77,34 @@ _rp_register() {
       clean="${clean},${tok}"
     done
     watch="${clean#,}"
+  fi
+
+  # Extra labels, appended to the base set rather than replacing it.
+  #
+  # Replacing is not on offer, and the reason is GitHub's rather than ours: it
+  # assigns self-hosted, the OS and the architecture to every self-hosted
+  # runner whatever config.sh is told, so a flag claiming to replace them would
+  # promise something GitHub silently overrides. The pool name is here too
+  # because it is the routing contract: a pool that could drop it would go on
+  # being listed by a name nothing routes to, and its jobs would queue for ever
+  # against a pool reporting perfect health.
+  #
+  # So an implicit label is REFUSED rather than quietly dropped, the same way
+  # --watch is refused on a repo pool. It also keeps `apply` idempotent: a
+  # token accepted here and normalised away would leave declared and derived
+  # permanently unequal, re-registering the pool on every run.
+  labels="${labels#,}"; labels="${labels// /}"
+  if [ -n "${labels}" ]; then
+    clean=""
+    for tok in $(echo "${labels}" | tr ',' ' '); do
+      _rp_valid_label "${tok}" || { _rp_err "--labels: $(_rp_label_rule), got '${tok}'"; return 1; }
+      case ",${RUNPOOL_BASE_LABELS},${name}," in
+        *",${tok},"*) _rp_err "--labels: '${tok}' is already on every runner in this pool and cannot be given again"; return 1 ;;
+      esac
+      case ",${clean}," in *",${tok},"*) continue ;; esac
+      clean="${clean},${tok}"
+    done
+    labels="${clean#,}"
   fi
 
   # Whose job the public-repository check is depends on the scope, and the two
@@ -136,10 +165,10 @@ _rp_register() {
     esac
   fi
 
-  local dir_base cache_base labels tarball i runner_dir cache_dir runner_name token
+  local dir_base cache_base tarball i runner_dir cache_dir runner_name token
   dir_base="${RUNPOOL_RUNNER_DIR}/${name}"
   cache_base="${RUNPOOL_CACHE_DIR}/pools/${name}"
-  labels="self-hosted,macOS,ARM64,${name}"
+  labels="$(_rp_pool_labels "${name}" "${labels}")"
   tarball="$(_rp_fetch_runner_tarball)" || return 1
   mkdir -p "${dir_base}"
 
@@ -229,6 +258,20 @@ _rp_write_pool_watch() {
     /^POOL_WATCH=/ { print "POOL_WATCH=\"" v "\""; seen = 1; next }
                    { print }
     END            { if (!seen) print "POOL_WATCH=\"" v "\"" }
+  ' "${conf}" >| "${conf}.tmp" && mv -f "${conf}.tmp" "${conf}"
+}
+
+# The full label list. Rebuilt whole for exactly the reason above, and here the
+# corruption that reasoning describes would land on this very field.
+#
+# $2 is the whole list, not the extras: POOL_LABELS is what config.sh is handed
+# and the extras are derived back out of it wherever they are wanted.
+_rp_write_pool_labels() {
+  local conf; conf="$(_rp_pool_conf "$1")"
+  awk -v v="$2" '
+    /^POOL_LABELS=/ { print "POOL_LABELS=\"" v "\""; seen = 1; next }
+                    { print }
+    END             { if (!seen) print "POOL_LABELS=\"" v "\"" }
   ' "${conf}" >| "${conf}.tmp" && mv -f "${conf}.tmp" "${conf}"
 }
 
@@ -412,10 +455,25 @@ _rp_set_count_locked() {
 # needs changing, because routing lives in the workflow; only GitHub's record
 # has to be recreated.
 # ---------------------------------------------------------------------------
+# Held for the whole re-registration, released by the caller rather than a
+# trap, for the reason `_rp_set_count` states. Without it this stands the pool
+# down and then spends a long time in config.sh with nothing stopping autoscale
+# or `up` starting it back up on top of registrations being rewritten. That was
+# latent while this was only ever run by hand; `apply` now calls it.
 _rp_reregister() {
+  local name="$1" rc
   _rp_require gh || return 1
-  local name="$1"
   [ -n "${name}" ] || { _rp_err "usage: runpool reregister <pool>"; return 1; }
+  _rp_valid_pool_name "${name}" || { _rp_err "invalid pool name: '${name}'"; return 1; }
+  _rp_resize_lock "${name}" || return 1
+  _rp_reregister_locked "${name}"
+  rc=$?
+  _rp_resize_unlock "${name}"
+  return ${rc}
+}
+
+_rp_reregister_locked() {
+  local name="$1"
   _rp_load_pool "${name}" || return 1
   _rp_down "${name}" || return 1
 
@@ -500,10 +558,15 @@ _rp_migrate_update_work_folder() {
     "${runner_dir}/.runner" >| "${tmp}" && mv -f "${tmp}" "${runner_dir}/.runner"
 }
 
-_rp_migrate_move_cache_dir() {
+# Move a directory, idempotently. Source gone means the move already happened,
+# target present means something is in the way. That shape is what makes an
+# interrupted `rename` resumable: re-running it finds each completed step done
+# and carries on. Two callers now, and it moves runner trees as well as caches,
+# which is why it is no longer named for one of them.
+_rp_move_dir() {
   local from="$1" to="$2"
   [ -d "${from}" ] || return 0
-  [ ! -e "${to}" ] || { _rp_err "migration target already has ${to}"; return 1; }
+  [ ! -e "${to}" ] || { _rp_err "cannot move ${from}: ${to} already exists"; return 1; }
   mkdir -p "$(dirname "${to}")" || return 1
   mv "${from}" "${to}"
 }
@@ -643,8 +706,8 @@ _rp_migrate_storage() {
       if [ -d "${runner_dir}/_work" ]; then
         rm -rf "${runner_dir}/_work" || return 1
       fi
-      _rp_migrate_move_cache_dir "${runner_dir}/.pnpm-store" "${cache_dir}/pnpm" || return 1
-      _rp_migrate_move_cache_dir "${runner_dir}/.npm-cache" "${cache_dir}/npm" || return 1
+      _rp_move_dir "${runner_dir}/.pnpm-store" "${cache_dir}/pnpm" || return 1
+      _rp_move_dir "${runner_dir}/.npm-cache" "${cache_dir}/npm" || return 1
       # Job temp belongs to the old workspace in the same way. Nothing in it
       # is durable runner state, so carrying it across creates risk for no gain.
       rm -rf "${runner_dir}/tmp" "${runner_dir}/.tmp" || return 1
@@ -855,6 +918,194 @@ _rp_down() {
 
 _rp_up_all()   { local p; for p in $(_rp_pool_names); do _rp_pool_paused "${p}" || _rp_up "${p}"; done; }
 _rp_down_all() { local p; for p in $(_rp_pool_names); do _rp_down "${p}" "${1:-}"; done; }
+
+# ---------------------------------------------------------------------------
+# rename: give a pool a different name, locally and at GitHub
+#
+# The name is not decoration. It is the config filename, the runner directory,
+# the cache directory, the launch-agent labels and their log files, three state
+# files, the lock, each runner's registered name at GitHub, and one of the
+# labels those runners carry. Changing it by hand means all of that, twice if
+# there is a second machine, and getting one wrong is silent.
+#
+# Moves rather than copies. `migrate-storage` copies because it crosses storage
+# roots, where a partial copy is real and the old tree is the safety net. A
+# rename keeps the same parent by construction, so `mv` is atomic, and a second
+# copy of a tree carrying runner credentials is a cost with nothing to buy.
+# ---------------------------------------------------------------------------
+_rp_rename_usage() { echo "usage: runpool rename <old> <new> [--drain] [--timeout <seconds>]"; }
+
+_rp_rename() {
+  local old="" new="" drain=0 timeout="${RUNPOOL_DRAIN_TIMEOUT}" rc
+  _rp_require gh || return 1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --drain)   drain=1; shift ;;
+      --timeout)
+        [ $# -ge 2 ] || { _rp_err "--timeout needs a value ($(_rp_rename_usage))"; return 1; }
+        timeout="$2"; shift 2 ;;
+      --timeout=*) timeout="${1#*=}"; shift ;;
+      -*) _rp_err "unknown flag: $1 ($(_rp_rename_usage))"; return 1 ;;
+      *)
+        if   [ -z "${old}" ]; then old="$1"
+        elif [ -z "${new}" ]; then new="$1"
+        else _rp_err "$(_rp_rename_usage)"; return 1
+        fi
+        shift ;;
+    esac
+  done
+
+  [ -n "${old}" ] && [ -n "${new}" ] || { _rp_err "$(_rp_rename_usage)"; return 1; }
+  # Both names, and before either reaches a lock path, a directory or the
+  # `find -name` pattern that removes the old plists.
+  _rp_valid_pool_name "${old}" || { _rp_err "invalid pool name: '${old}'"; return 1; }
+  _rp_valid_pool_name "${new}" || { _rp_err "invalid pool name: '${new}'"; return 1; }
+  [ "${old}" != "${new}" ] || { _rp_err "'${old}' is already called that"; return 1; }
+  case "${timeout}" in ''|*[!0-9]*|0) _rp_err "--timeout: whole seconds above zero, got '${timeout}'"; return 1 ;; esac
+
+  _rp_load_pool "${old}" || return 1
+  [ ! -f "$(_rp_pool_conf "${new}")" ] || {
+    _rp_err "a pool called '${new}' already exists"
+    _rp_err "If a rename was interrupted, one of '${old}' and '${new}' is a leftover; remove that one and retry."
+    return 1
+  }
+
+  # Both names, old first. The new one is not decoration: from the moment its
+  # config exists, `_rp_pool_names` returns it and autoscale would otherwise
+  # start it in the middle of the move. Two locks cannot deadlock, because
+  # _rp_resize_lock refuses rather than blocks; the second failing has to
+  # release the first.
+  _rp_resize_lock "${old}" || return 1
+  _rp_resize_lock "${new}" || { _rp_resize_unlock "${old}"; return 1; }
+  _rp_rename_locked "${old}" "${new}" "${drain}" "${timeout}"
+  rc=$?
+  _rp_resize_unlock "${new}"
+  _rp_resize_unlock "${old}"
+  return ${rc}
+}
+
+_rp_rename_locked() {
+  local old="$1" new="$2" drain="$3" timeout="$4" was_up=0 busy i
+  local new_dir new_cache extras runner_dir runner_name token orphaned=0 configured=0
+
+  # Read before any drain, because draining unloads the agents and the answer
+  # would then always be no.
+  _rp_agent_loaded "$(_rp_label "${old}" 1)" && was_up=1
+
+  if [ "${drain}" = "1" ]; then
+    _rp_drain_pool "${old}" "${timeout}" || return 1
+  fi
+  busy="$(_rp_busy_in "${POOL_DIR}")"
+  [ "${busy}" -eq 0 ] || {
+    _rp_err "'${old}' has ${busy} job(s) running, so refusing to rename (they would fail). Wait for them, or retry with --drain to let them finish first."
+    return 1
+  }
+  _rp_down "${old}" || return 1
+
+  # In place, not into RUNPOOL_RUNNER_DIR. A pool migrated from the legacy
+  # layout has POOL_DIR under the legacy base, and hardcoding the native root
+  # would drag half of it into Application Support while the rest stayed put.
+  # It also guarantees the same filesystem, which is what makes mv atomic.
+  new_dir="$(dirname "${POOL_DIR}")/${new}"
+  _rp_move_dir "${POOL_DIR}" "${new_dir}" || return 1
+  new_cache="${POOL_CACHE_DIR}"
+  if [ "${POOL_LEGACY_LAYOUT}" != "1" ]; then
+    new_cache="$(dirname "${POOL_CACHE_DIR}")/${new}"
+    _rp_move_dir "${POOL_CACHE_DIR}" "${new_cache}" || return 1
+  fi
+
+  # One write, as register does, rather than a series of edits: a crash between
+  # two of them leaves a config that loads and is wrong.
+  #
+  # POOL_CACHE_DIR is written only when the pool had one. Its ABSENCE is how
+  # _rp_load_pool recognises the legacy layout, so adding it here would quietly
+  # convert a legacy pool while its files stayed where they were.
+  extras="$(_rp_extra_labels "${POOL_LABELS}" "${old}")"
+  {
+    cat <<CONF
+POOL_NAME="${new}"
+POOL_SCOPE="${POOL_SCOPE}"
+POOL_TARGET="${POOL_TARGET}"
+POOL_COUNT="${POOL_COUNT}"
+POOL_DIR="${new_dir}"
+CONF
+    [ "${POOL_LEGACY_LAYOUT}" = "1" ] || printf 'POOL_CACHE_DIR="%s"\n' "${new_cache}"
+    printf 'POOL_LABELS="%s"\n' "$(_rp_pool_labels "${new}" "${extras}")"
+    [ -z "${POOL_WATCH:-}" ] || printf 'POOL_WATCH="%s"\n' "${POOL_WATCH}"
+  } >| "$(_rp_pool_conf "${new}")"
+  rm -f "$(_rp_pool_conf "${old}")"
+
+  # Reload under the new name, which both re-points every POOL_* the rest of
+  # this function reads and catches a config we just wrote that will not load,
+  # before anything at GitHub is touched.
+  _rp_load_pool "${new}" || return 1
+
+  [ -f "$(_rp_pool_pause_flag "${old}")" ] && mv -f "$(_rp_pool_pause_flag "${old}")" "$(_rp_pool_pause_flag "${new}")"
+  rm -f "$(_rp_pool_started_flag "${old}")" "$(_rp_pool_stuck_file "${old}")"
+
+  # Every runner directory that exists, not 1..POOL_COUNT. A count lowered by
+  # hand leaves higher-numbered runners on disk and still registered, and those
+  # have to be deregistered here or they are stranded for ever under a name
+  # nothing records. They are deliberately NOT re-registered: a leftover
+  # runner-5 in a four-runner pool would be a permanent miscount.
+  while IFS= read -r runner_dir; do
+    [ -n "${runner_dir}" ] || continue
+    i="${runner_dir##*/runner-}"
+    case "${i}" in ''|*[!0-9]*) continue ;; esac
+
+    # The token first: a token failure must not cost a registration we have
+    # already deleted.
+    token="$(_rp_registration_token "${POOL_SCOPE}" "${POOL_TARGET}")" \
+      || { _rp_err "${new} runner-${i}: no registration token. Check 'gh auth status', that ${POOL_TARGET} exists, and that you have admin on it"; return 1; }
+
+    # --replace cannot help here, unlike in reregister. It replaces a
+    # registration OF THE SAME NAME, and the name is exactly what is changing,
+    # so GitHub would keep the old one: permanently offline, still carrying
+    # '${old}' as a label so any surviving runs-on matches a dead runner, and
+    # unreachable afterwards because config.sh overwrites the .runner holding
+    # its agentId. Counted rather than fatal, for the reason set-count states:
+    # stopping half way leaves the pool half renamed.
+    _rp_deregister_runner "${runner_dir}" "${POOL_SCOPE}" "${POOL_TARGET}" || orphaned=$(( orphaned + 1 ))
+    rm -f "${runner_dir}/.runner" "${runner_dir}/.credentials" \
+          "${runner_dir}/.credentials_rsaparams" "${runner_dir}/.runner_migrated" \
+          "${runner_dir}/.service"
+
+    [ "${i}" -le "${POOL_COUNT}" ] || {
+      _rp_log "${new} runner-${i}: past the pool's count of ${POOL_COUNT}, deregistered and left on disk"
+      continue
+    }
+    _rp_migrate_update_work_folder "${runner_dir}" "$(_rp_runner_work_dir "${new}" "${i}")" || return 1
+    runner_name="$(hostname -s)-${new}-${i}"
+    _rp_log "${new} runner-${i}: registering as '${runner_name}'"
+    ( cd "${runner_dir}" && ./config.sh --unattended --replace \
+        --url "https://github.com/${POOL_TARGET}" --token "${token}" \
+        --name "${runner_name}" --labels "${POOL_LABELS}" --work "$(_rp_runner_work_dir "${new}" "${i}")" \
+        >> "${RUNPOOL_LOG}" 2>&1 ) || return 1
+    _rp_prepare_runner_cache "${new}" "${i}"
+    _rp_write_plist "$(_rp_label "${new}" "${i}")" "${runner_dir}" \
+                    "$(_rp_runner_cache_dir "${new}" "${i}")" "${POOL_LEGACY_LAYOUT}"
+    configured=$(( configured + 1 ))
+  done <<EOF
+$(find "${POOL_DIR}" -maxdepth 1 -type d -name 'runner-*' 2>/dev/null | sort)
+EOF
+
+  # _rp_rewrite_plists only ever writes, so the old ones have to go explicitly.
+  # `find` rather than a glob, which would expand to a literal against an empty
+  # agent directory.
+  find "${RUNPOOL_AGENT_DIR}" -maxdepth 1 -name "${RUNPOOL_LABEL_NS}.${old}.*.plist" -exec rm -f {} + 2>/dev/null
+
+  _rp_log "pool '${old}' renamed to '${new}': ${configured} runner(s) re-registered"
+  _rp_log "workflows using 'runs-on: [self-hosted, ${old}]' no longer match; the pool now carries '${new}'"
+  _rp_log "${RUNPOOL_POOLS_FILE} still names '${old}'; update it or the next 'runpool apply' will create that pool again"
+
+  if [ "${orphaned}" -gt 0 ]; then
+    _rp_err "${orphaned} runner(s) are still registered on ${POOL_TARGET} under the old name. They are offline and still carry '${old}' as a label, so a workflow still routing to it would match one and queue for ever. Run the DELETE commands above, or remove them from GitHub's runner settings."
+    return 1
+  fi
+
+  [ "${was_up}" = "1" ] && ! _rp_pool_paused "${new}" && _rp_up "${new}"
+  return 0
+}
 
 # ---------------------------------------------------------------------------
 # remove: deregister and delete a pool entirely

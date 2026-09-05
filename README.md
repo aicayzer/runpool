@@ -56,7 +56,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 
 | Command | |
 |---|---|
-| `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--watch OWNER/REPO,...] [--allow-public]` | Create a pool and configure its runners |
+| `register <pool> --repo OWNER/REPO\|--org ORG [--count N] [--watch OWNER/REPO,...] [--labels LABEL,...] [--allow-public]` | Create a pool and configure its runners |
 | `set-count <pool> N [--if-count M] [--drain]` | Change a pool's runner count. `--if-count` refuses unless it is currently M; `--drain` lets running jobs finish first |
 | `apply [--dry-run] [--file PATH]` | Reconcile the machine to a file describing its pools |
 | `up` / `down <pool> [--drain\|--force]` | Bring a pool online, or stand it down. `--drain` waits for running jobs; `--force` ends them |
@@ -67,6 +67,7 @@ The first job after a quiet spell waits about a minute for its pool to come up. 
 | `stats [--queue] [--days N \| --all]` | What jobs cost, from recorded telemetry. `--queue` adds the wait before each job started, over the last 7 days unless widened |
 | `pause [pool]` / `resume [pool]` | Global kill switch, or persistent per-pool pause |
 | `reregister <pool>` | Recreate GitHub registrations, keeping the local install |
+| `rename <old> <new> [--drain]` | Rename a pool, locally and at GitHub |
 | `rewrite-agents` | Regenerate the launch agents after changing hook settings |
 | `remove <pool>` | Deregister and delete a pool |
 | `clean [pool]` | Prune work directories, temp, diagnostics, old binaries, caches |
@@ -83,6 +84,8 @@ Three commands earn a note beyond the table:
 - **The pools file is intent; the running pool is state.** `set-count` changes the pool and deliberately does not write the file, so the two disagree after any resize. That is the normal condition between them rather than a fault: the file records the shape you want a machine to have and is what you copy between machines, while the pool records what is running right now. `apply` is where they are reconciled, and it resolves the difference in the file's favour, so `apply --dry-run` first is not a formality. A `count 3 -> 4` line in that plan is the drift, and applying it would undo a deliberate resize.
 - **`set-count` is absolute, so a caller that reads a count and acts on it later needs `--if-count`.** A pool changed in between turns a growth into a shrink, and shrinking deregisters runners. `--if-count M` refuses unless the pool is still at M, and one resize per pool runs at a time so two callers cannot interleave. A runner deregistered locally that GitHub still holds is reported as a failure, not logged and passed over: a stale registration attracts jobs that then queue forever.
 - **`status --json --local` skips the GitHub query**, reporting those fields as `null`. The root `paused` field is the global kill switch; every pool also carries its own additive `paused` field. Anything refreshing on a timer should use `--local`, since one API call per pool per minute is thousands a day and makes a passive readout fail whenever the network does.
+- **The pool's name is one of its runners' labels, so renaming changes routing.** Every runner carries `self-hosted`, the machine's OS and architecture, the pool's name, and anything `--labels` adds. `rename` moves the pool's directories, config, launch agents and state, then re-registers every runner under the new name, which means `runs-on: [self-hosted, <old>]` stops matching and has to be updated. It deletes the old GitHub registrations rather than replacing them, because `--replace` only covers a name collision and the name is what is changing; a registration left behind would be permanently offline while still advertising the old label. `rename` does not touch the pools file, so update that too.
+- **A label change re-registers the whole pool.** Labels live on GitHub's registration, not in a file GitHub reads, so `apply` applies one by standing the pool down and re-registering every runner. That is far heavier than a count or watch-list change and the plan says so. Absent `--labels` means no extra labels, the same way absent `--count` would mean the default: a pool whose config was edited by hand to add a label needs that label declared in the file, or the next `apply` removes it.
 - **`doctor` answers "why is nothing picking this up" in one command.** It checks `gh` and its authentication, that GitHub still holds the registrations, that the launch agents exist, and then disk headroom, config permissions and the organisation's runner-group setting. Each failure comes with what to do about it, and it exits non-zero when something is actually wrong. It repairs nothing, so it is safe at any moment including mid-job.
 
 ## Describing a machine's pools
