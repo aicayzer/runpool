@@ -125,17 +125,20 @@ POOL_LABELS="self-hosted,macOS,ARM64,alpha"
 CONF
 mkdir -p "${RUNPOOL_BASE}/runners/alpha"
 
-# Answers with whatever run ids QUEUED_IDS names, and records that it was
-# called. The call count is asserted below: the guard must not cost an extra
-# request, and this is what catches anyone adding a second one later.
+# Answers with whatever run ids QUEUED_IDS and PENDING_IDS name, per status,
+# and records that it was called. The call count is asserted below: the guard
+# must not cost a request beyond one per status, and this is what catches
+# anyone adding another later.
 cat >"${bin_dir}/gh" <<'STUB'
 #!/bin/bash
 echo "$2" >> "${GH_CALLS}"
 case "$2" in
-  */jobs*) echo 0 ;;
-  *) n=0; for i in ${QUEUED_IDS}; do n=$(( n + 1 )); done
-     echo "${n} $(echo ${QUEUED_IDS} | tr ' ' ',')" ;;
+  */jobs*) echo 0; exit 0 ;;
+  *status=pending*) ids="${PENDING_IDS:-}" ;;
+  *) ids="${QUEUED_IDS:-}" ;;
 esac
+n=0; for i in ${ids}; do n=$(( n + 1 )); done
+echo "${n} $(echo ${ids} | tr ' ' ',')"
 STUB
 chmod +x "${bin_dir}/gh"
 export PATH="${bin_dir}:${PATH}"
@@ -170,13 +173,25 @@ check "three fruitless wakes, then silence" "3" "$(wakes_seen)"
 
 before=$(calls)
 quietly _rp_autoscale
-check "a held pool still costs exactly one call" "1" "$(( $(calls) - before ))"
+check "a held pool costs exactly one call per status" "2" "$(( $(calls) - before ))"
 
 # A second run arriving is work the pool has never judged, so it wakes at once
 # even though the first run is still held.
 export QUEUED_IDS="111 222"
 quietly _rp_autoscale
 check "a new run wakes a held pool" "4" "$(wakes_seen)"
+
+# A run parked before any job is assigned reports `pending`, not `queued`. It
+# is the same waiting work, so it must wake the pool on its own: a repository
+# whose workflows share a concurrency group produces nothing else.
+export QUEUED_IDS=""
+export PENDING_IDS="444"
+rm -f "$(_rp_pool_stuck_file alpha)"
+before_wakes=$(wakes_seen)
+quietly _rp_autoscale
+check "a pending run wakes the pool" "$(( before_wakes + 1 ))" "$(wakes_seen)"
+export PENDING_IDS=""
+export QUEUED_IDS="111 222"
 
 # GitHub's error JSON arrives on stdout, not stderr, so a watch entry naming a
 # repository that has been renamed or made private hands the helper a line
@@ -198,10 +213,12 @@ cat >"${bin_dir}/gh" <<'STUB'
 #!/bin/bash
 echo "$2" >> "${GH_CALLS}"
 case "$2" in
-  */jobs*) echo 0 ;;
-  *) n=0; for i in ${QUEUED_IDS}; do n=$(( n + 1 )); done
-     echo "${n} $(echo ${QUEUED_IDS} | tr ' ' ',')" ;;
+  */jobs*) echo 0; exit 0 ;;
+  *status=pending*) ids="${PENDING_IDS:-}" ;;
+  *) ids="${QUEUED_IDS:-}" ;;
 esac
+n=0; for i in ${ids}; do n=$(( n + 1 )); done
+echo "${n} $(echo ${ids} | tr ' ' ',')"
 STUB
 chmod +x "${bin_dir}/gh"
 

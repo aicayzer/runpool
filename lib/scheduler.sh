@@ -729,19 +729,37 @@ _rp_stuck_new_holds() {
   ' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
 }
 
-# The queued runs in one repository, as "<total> <id,id,...>". One call, the
-# same as the count alone used to cost. A failed call yields an empty string,
-# so every caller degrades to the behaviour that predates this rule.
+# The runs waiting for a runner in one repository, as "<total> <id,id,...>".
+# A failed call contributes nothing, so a repository gh cannot read degrades to
+# the behaviour that predates this rule rather than blinding the whole pool.
+#
+# Two requests, because GitHub's runs API takes one status per request and a
+# run waiting for a runner is not always `queued`. One parked before any job is
+# assigned reports `pending`, a workflow-level concurrency group being the
+# realistic cause, and a pool whose workflows all share a group could therefore
+# sit down through a full queue of its own work. Not `waiting`, which is a
+# deployment awaiting approval and needs no runner, and not `in_progress`,
+# which is already being served.
 _rp_queued_runs() {
-  local out
-  # The body, not just the status, has to be discarded on failure: gh prints
-  # GitHub's error JSON to stdout, so a watch list naming a repository that has
-  # been renamed or made private would otherwise hand the caller a line
-  # beginning '{"message":"Not Found"'. That used to reach an arithmetic
-  # expansion and abort it.
-  out="$(gh api "/repos/$1/actions/runs?status=queued&per_page=100&exclude_pull_requests=true" \
-         --jq '"\(.total_count) \([.workflow_runs[].id] | sort | map(tostring) | join(","))"' 2>/dev/null)" || return 0
-  printf '%s\n' "${out}"
+  local st out n reached=0 total=0 ids=""
+  for st in queued pending; do
+    # The body, not just the status, has to be discarded on failure: gh prints
+    # GitHub's error JSON to stdout, so a watch list naming a repository that has
+    # been renamed or made private would otherwise hand the caller a line
+    # beginning '{"message":"Not Found"'. That used to reach an arithmetic
+    # expansion and abort it.
+    out="$(gh api "/repos/$1/actions/runs?status=${st}&per_page=100&exclude_pull_requests=true" \
+           --jq '"\(.total_count) \([.workflow_runs[].id] | sort | map(tostring) | join(","))"' 2>/dev/null)" || continue
+    reached=1
+    n="${out%% *}"
+    case "${n}" in ''|*[!0-9]*) continue ;; esac
+    total=$(( total + n ))
+    [ "${out}" = "${n}" ] && continue
+    [ -n "${out#* }" ] || continue
+    if [ -n "${ids}" ]; then ids="${ids},${out#* }"; else ids="${out#* }"; fi
+  done
+  [ "${reached}" = "1" ] || return 0
+  printf '%s %s\n' "${total}" "${ids}"
 }
 
 # How many jobs GitHub says a run has. Corroboration for a message, never a
